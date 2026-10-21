@@ -1,0 +1,422 @@
+Screen {
+    background: $background;
+}
+
+Header {
+    dock: top;
+    height: 1;
+    background: $primary-background;
+    color: $text;
+}
+
+#tap-status {
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+    background: $surface;
+}
+
+#binding-filter {
+    height: 3;
+    margin: 0 1;
+}
+
+#bindings {
+    height: 1fr;
+    min-height: 5;
+    margin: 0 1;
+}
+
+#keyboard-map {
+    width: 100%;
+    height: auto;
+    max-height: 22;
+    padding: 0;
+    margin: 0;
+    border-top: solid $primary-darken-2;
+}
+
+KeyboardMap {
+    width: auto;
+    height: auto;
+}
+
+.map-content {
+    width: auto;
+    height: auto;
+    layout: horizontal;
+    align: center top;
+}
+
+.map-stacked #map-content {
+    layout: vertical;
+    align: center middle;
+}
+
+#main-keyboard, .keyboard-rows, .keyboard-row, .map-side, .map-cluster {
+    width: auto;
+    height: auto;
+}
+
+.keyboard-rows {
+    width: 75;
+    align: left top;
+    background: transparent;
+}
+
+.keyboard-row {
+    width: 75;
+    align: left middle;
+    background: transparent;
+}
+
+.map-side {
+    layout: vertical;
+    padding-left: 1;
+}
+
+.map-stacked #map-side {
+    layout: horizontal;
+    padding-left: 0;
+    padding-top: 1;
+}
+
+.map-cluster {
+    align: center middle;
+}
+
+.cluster-title {
+    height: 1;
+    color: $text-muted;
+    text-align: center;
+    text-style: bold;
+}
+
+.arrow-row, .knob-row, .function-row {
+    width: auto;
+    height: auto;
+    align: center middle;
+}
+
+.keycap-spacer {
+    width: 5;
+    min-width: 5;
+    height: 3;
+}
+
+.map-compact .keycap-spacer {
+    height: 1;
+}
+
+.keycap {
+    width: 5;
+    min-width: 5;
+    height: 3;
+    padding: 0;
+    margin: 0;
+    border: round $surface-lighten-2;
+    background: $surface;
+    color: $text;
+    text-style: bold;
+    content-align: center middle;
+}
+
+.map-actions.map-detailed .keycap {
+    height: 4;
+    min-height: 4;
+}
+
+.keycap-unit-arrow { width: 6; min-width: 6; }
+.keycap-unit-14 { width: 7; min-width: 7; }
+.keycap-unit-15 { width: 8; min-width: 8; }
+.keycap-unit-175 { width: 9; min-width: 9; }
+.keycap-unit-225 { width: 11; min-width: 11; }
+.keycap-unit-125, .keycap-unit-12 { width: 6; min-width: 6; }
+.keycap-unit-2 { width: 10; min-width: 10; }
+.keycap-unit-meta, .keycap-unit-altgr { width: 8; min-width: 8; }
+.keycap-unit-space { width: 27; min-width: 27; }
+.keycap-unit-knob { width: 9; min-width: 9; }
+
+.keycap.bound {
+    border: heavy $success;
+    background: $success;
+    color: $background;
+}
+
+.keycap.layer-key {
+    border: heavy $secondary;
+    background: $secondary;
+    color: $background;
+}
+
+.keycap.selected {
+    border: heavy $warning;
+    background: $surface;
+    color: $warning;
+    text-style: bold;
+}
+
+.map-compact .keycap {
+    height: 1;
+    min-height: 1;
+    padding: 0;
+    border: none;
+    background: $surface-lighten-1;
+}
+
+.map-actions.map-compact .keycap {
+    height: 2;
+    min-height: 2;
+}
+
+.map-compact .keycap.has-action {
+    height: 2;
+}
+
+.map-compact .keycap.bound {
+    background: $success;
+    color: $background;
+}
+
+.map-compact .keycap.layer-key {
+    background: $secondary;
+    color: $background;
+    text-style: bold;
+}
+
+.map-compact .keycap.selected {
+    background: $warning;
+    color: $background;
+    text-style: bold reverse;
+}
+
+.map-extra, .map-legend {
+    height: auto;
+    color: $text-muted;
+    text-align: center;
+}
+
+.map-legend {
+    height: 1;
+}
+
+Footer {
+    height: 1;
+}
+
+Button {
+    height: 1;
+    min-height: 1;
+    padding: 0 1;
+    border: none;
+}
+
+DataTable, RichLog, VerticalScroll {
+    scrollbar-background: $surface-darken-1;
+    scrollbar-color: $surface-lighten-2;
+    scrollbar-color-hover: $primary;
+    scrollbar-color-active: $primary;
+}
+
+.hidden {
+    display: none;
+}
+
+ModalScreen {
+    align: center middle;
+    background: $background 70%;
+}
+
+KeyboardMapScreen {
+    background: $background;
+}
+
+.dialog {
+    width: 92%;
+    max-width: 106;
+    height: auto;
+    max-height: 90%;
+    padding: 1 2;
+    border: round $primary;
+    background: $surface;
+}
+
+.dialog-title {
+    height: 1;
+    margin-bottom: 0;
+    color: $primary;
+    text-style: bold;
+}
+
+.dialog-buttons {
+    height: 1;
+    align: right middle;
+    margin-top: 1;
+}
+
+.dialog-buttons Button {
+    min-width: 4;
+    margin-left: 1;
+}
+
+.picker-dialog #action-filter {
+    height: 3;
+    margin-bottom: 1;
+}
+
+.picker-dialog DataTable {
+    height: 1fr;
+    min-height: 6;
+}
+
+.compact-dialog {
+    width: 72%;
+    max-width: 74;
+    height: auto;
+    max-height: 80%;
+}
+
+.compact-dialog DataTable {
+    height: auto;
+    max-height: 18;
+    min-height: 6;
+}
+
+.preview-dialog {
+    height: auto;
+    max-height: 90%;
+}
+
+#preview-log {
+    height: auto;
+    min-height: 3;
+    max-height: 60%;
+    border: round $surface-lighten-2;
+    background: $surface-darken-1;
+}
+
+.help-dialog {
+    height: 90%;
+    max-height: 31;
+}
+
+#help-content {
+    height: 1fr;
+    padding: 0 1;
+}
+
+#help-lines {
+    height: auto;
+}
+
+.map-dialog {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    max-height: 100%;
+    padding: 0 1;
+    border: round $primary;
+    background: $surface;
+}
+
+.map-dialog .dialog-title {
+    height: 1;
+    margin: 0;
+    content-align: center middle;
+}
+
+.map-dialog .dialog-buttons {
+    height: 1;
+    margin: 0;
+    padding: 0;
+}
+
+.map-dialog .dialog-buttons Button {
+    width: auto;
+    min-width: 6;
+    height: 1;
+    padding: 0 1;
+}
+
+#full-keyboard-map {
+    width: auto;
+    height: auto;
+    max-height: 100%;
+}
+
+.macro-dialog {
+    height: auto;
+    max-height: 90%;
+}
+
+#macro-validation {
+    height: 1;
+    color: $success;
+}
+
+#macro-steps {
+    height: auto;
+    min-height: 3;
+    max-height: 50%;
+}
+
+.macro-preview, .macro-caveat {
+    height: auto;
+    max-height: 2;
+    color: $text-muted;
+}
+
+.macro-caveat {
+    color: $warning;
+}
+
+.macro-actions {
+    height: 1;
+    align: right middle;
+}
+
+.macro-actions Button {
+    min-width: 5;
+    margin: 0 0 0 1;
+}
+
+.capture-dialog {
+    width: 80%;
+    max-width: 80;
+    height: auto;
+    max-height: 18;
+}
+
+#capture-help, #capture-state {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.live-dialog {
+    width: 94%;
+    height: auto;
+    max-height: 90%;
+}
+
+#live-state {
+    height: 1;
+    color: $text-muted;
+}
+
+#live-hint {
+    height: 1;
+    color: $text-muted;
+}
+
+#live-log {
+    height: auto;
+    min-height: 5;
+    max-height: 60%;
+    border: round $surface-lighten-2;
+    background: $surface-darken-1;
+}
+
+#live-status {
+    height: 1;
+    color: $text-muted;
+}

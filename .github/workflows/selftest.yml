@@ -1,0 +1,29 @@
+name: selftest
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: selftest (keyd is not installed on the runner, so keyd checks are skipped)
+        run: python keymap.py --selftest
+      - name: list bindings
+        run: python keymap.py list
+
+  uitest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10
+      - name: headless Textual UI tests
+        run: uv run keymap.py --uitest
