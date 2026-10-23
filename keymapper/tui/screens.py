@@ -103,6 +103,8 @@ class CaptureScreen(ModalScreen[tuple[str | None, str]]):
 
     BINDINGS = [("escape", "cancel", "Cancel"), ("ctrl+g", "cancel", "Cancel"),
                 ("ctrl+t", "show_typed", "Type key name")]
+    # Focus nothing: auto-focus picked the hidden #typed-key Input, which swallowed every key ("" since None inherits the app's).
+    AUTO_FOCUS = ""
 
     def __init__(self, command, timeout: float = 10) -> None:
         super().__init__()
@@ -152,7 +154,7 @@ class CaptureScreen(ModalScreen[tuple[str | None, str]]):
         self.finished = True
         self.dismiss((key, message))
 
-    def show_typed(self) -> None:
+    def action_show_typed(self) -> None:
         field = self.query_one("#typed-key", Input)
         field.remove_class("hidden")
         field.focus()

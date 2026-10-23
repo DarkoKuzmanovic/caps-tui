@@ -51,6 +51,7 @@ async def _add_typed(pilot, app, key: str, action: str) -> None:
     await _wait_for_screen(app, pilot, CaptureScreen)
     await pilot.press("ctrl+t")
     field = app.screen.query_one("#typed-key", Input)
+    assert not field.has_class("hidden") and app.focused is field, "Ctrl+T reveals and focuses the key-name field"
     field.value = key
     await pilot.press("enter")
     await _wait_for_screen(app, pilot, ActionPickerScreen)
@@ -87,6 +88,19 @@ async def _run_flows(config_path: Path, etc_path: Path, monitor_path: Path) -> N
 
             await _add_typed(pilot, app, "n", "home")
             assert ("n", "home") in app.binds, "typed key capture plus action picker adds binding"
+
+            with patch.dict(os.environ, {"KEYMAP_MONITOR_CMD": "false"}):
+                await pilot.press("a")
+                capture = await _wait_for_screen(app, pilot, CaptureScreen)
+                for _ in range(40):
+                    await pilot.pause(0.05)
+                    if "unavailable" in str(capture.query_one("#capture-state").render()):
+                        break
+                assert app.focused is None, "capture dialog must not focus the hidden key-name field"
+                await pilot.press("space")
+                await _wait_for_screen(app, pilot, ActionPickerScreen)
+                await pilot.press("escape")
+                await pilot.pause(0.1)
 
             await pilot.press("enter")
             await _wait_for_screen(app, pilot, ActionPickerScreen)
