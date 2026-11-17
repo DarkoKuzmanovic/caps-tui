@@ -78,6 +78,8 @@ pub struct Edit {
     pub backups: Vec<crate::keyd::system::BackupEntry>,
     /// The diff and warnings shown before an apply.
     pub apply_lines: Vec<String>,
+    /// How far the review is scrolled.
+    pub apply_offset: usize,
 }
 
 impl Edit {
@@ -312,17 +314,20 @@ fn commit_backup(s: &mut State, path: &std::path::Path) {
 
 /// Open the review: the live/editor diff plus the risk warnings.
 pub fn open_apply(s: &mut State) {
-    let live = crate::keyd::system::read_live_config(&s.text).0;
+    // The fallback is the *saved* file, not the buffer: with an unreadable /etc the diff would
+    // otherwise be empty and the apply refused for the wrong reason.
+    let saved = std::fs::read_to_string(&s.paths.conf).unwrap_or_default();
+    let live = crate::keyd::system::read_live_config_in(&s.paths.etc, &saved).0;
     let diff = crate::keyd::config::diff_lines(&live, &s.text, "live default.conf", "editor");
     if diff.is_empty() {
         s.status = "No differences; nothing to apply.".to_string();
         return;
     }
-    let mut lines = diff;
-    lines.extend(crate::keyd::rules::warning_preview_lines(
-        &s.binds,
-        s.tap.action.as_deref(),
-    ));
+    let mut lines = crate::keyd::rules::warning_preview_lines(&s.binds, s.tap.action.as_deref());
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.extend(diff);
     s.edit = Edit {
         mode: Some(Mode::Apply),
         apply_lines: lines,
@@ -330,14 +335,20 @@ pub fn open_apply(s: &mut State) {
     };
 }
 
-/// Send the buffer to the apply helper and report what it said.
+/// Save the buffer, then send it to the apply helper and report what it said.
 fn apply_now(s: &mut State) {
+    // The helper installs what it is handed, so the file must match it: otherwise the next
+    // launch loads the old bindings and the next apply pushes them back.
+    if let Err(error) = std::fs::write(&s.paths.conf, &s.text) {
+        s.edit.error = format!("cannot write {}: {error}", s.paths.conf.display());
+        return;
+    }
+    s.dirty = false;
     let how = s.privilege.clone();
     match crate::keyd::privilege::apply_text(&how, &s.text) {
         Ok(outcome) if outcome.status.success() => {
             s.edit.close();
-            s.dirty = false;
-            s.status = "Applied.".to_string();
+            s.status = "Saved and applied.".to_string();
         }
         Ok(outcome) => {
             s.edit.error = if outcome.message.is_empty() {
@@ -561,6 +572,15 @@ pub fn on_key(s: &mut State, ev: &KeyEvent) -> bool {
             _ => false,
         },
         Mode::Apply => match &ev.key {
+            Key::Up => {
+                s.edit.apply_offset = s.edit.apply_offset.saturating_sub(1);
+                true
+            }
+            Key::Down => {
+                let last = s.edit.apply_lines.len().saturating_sub(1);
+                s.edit.apply_offset = (s.edit.apply_offset + 1).min(last);
+                true
+            }
             Key::Enter => {
                 apply_now(s);
                 true
@@ -684,6 +704,7 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
         Mode::Packs => "Preset packs".to_string(),
         Mode::Backups => "Backups".to_string(),
         Mode::Monitor => "Live keyd output".to_string(),
+        Mode::Apply => "Review and apply".to_string(),
         Mode::Normal => String::new(),
     };
     body = body.child(text(title).font(type_::TITLE).color(t.text));
@@ -919,6 +940,31 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
             }
             body = body.child(
                 text("c clears · Esc stops").font(type_::SECTION).color(t.text_secondary),
+            );
+        }
+        Mode::Apply => {
+            let total = s.edit.apply_lines.len();
+            let offset = s.edit.apply_offset.min(total.saturating_sub(1));
+            for (index, line) in s.edit.apply_lines.iter().skip(offset).take(24).enumerate() {
+                body = body.child(
+                    text(line.clone())
+                        .key(format!("apply-{index}"))
+                        .font(type_::SECTION)
+                        .color(t.text),
+                );
+            }
+            if offset + 24 < total {
+                body = body.child(
+                    text(format!("… {} more lines", total - offset - 24))
+                        .key("apply-more")
+                        .font(type_::SECTION)
+                        .color(t.text_secondary),
+                );
+            }
+            body = body.child(
+                text("↑↓ scroll · Enter applies with root · Esc cancels")
+                    .font(type_::SECTION)
+                    .color(t.text_secondary),
             );
         }
         Mode::Normal => {}

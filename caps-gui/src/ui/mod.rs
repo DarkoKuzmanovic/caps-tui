@@ -84,6 +84,8 @@ pub struct State {
     pub waker: Option<crate::keyd::system::Waker>,
     /// Overrides how the monitor is started; tests and scripted runs set it.
     pub monitor_command: Option<Vec<String>>,
+    /// How an apply asks for root; `run` fills it from the environment.
+    pub privilege: crate::keyd::privilege::Priv,
 }
 
 impl Default for State {
@@ -106,6 +108,7 @@ impl Default for State {
             monitor_status: String::new(),
             waker: None,
             monitor_command: None,
+            privilege: crate::keyd::privilege::Priv::SudoTty,
         }
     }
 }
@@ -235,7 +238,7 @@ pub fn view(s: &State, _: &mut Cx<State>) -> El {
     let footer = if s.filtering {
         format!("/{}", s.filter)
     } else if s.filter.is_empty() {
-        "↑↓ move · / filter · Enter edit · d delete · t tap · p packs · b backups · l monitor · s save · u/U undo · q quit".to_string()
+        "↑↓ move · / filter · Enter edit · d delete · t tap · p packs · b backups · l monitor · A apply · s save · u/U undo · q quit".to_string()
     } else {
         format!("filter {:?} · Esc clears · Enter edit · s save", s.filter)
     };
@@ -348,6 +351,10 @@ pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
             open_monitor(s);
             true
         }
+        Key::Text(typed) if typed == "A" => {
+            edit::open_apply(s);
+            true
+        }
         Key::Text(typed) if typed == "s" => {
             save(s);
             true
@@ -426,11 +433,12 @@ fn setup(s: &mut State, waker: rune::Waker) {
 
 /// Open the window.
 pub fn run() {
-    let state = State::load(Paths::from_env()).unwrap_or_else(|error| {
+    let mut state = State::load(Paths::from_env()).unwrap_or_else(|error| {
         let mut state = State::default();
         state.status = format!("cannot read {}: {error}", state.paths.conf.display());
         state
     });
+    state.privilege = crate::keyd::privilege::detect();
     rune::App::new(AppSpec::<State> {
         scenes: &[
             ("picker", |s: &mut State| edit::open_picker(s, "left")),
@@ -458,6 +466,7 @@ pub fn run() {
                 s.monitor_status = "monitoring".to_string();
                 s.edit.mode = Some(edit::Mode::Monitor);
             }),
+            ("apply", |s: &mut State| edit::open_apply(s)),
         ],
         on_key: Some(on_key),
         poll: Some(poll_hook),

@@ -400,11 +400,6 @@ fn the_pack_panel_previews_before_merging() {
         press(&mut rt, Key::Down);
     }
     rt.frame(1.0 / 60.0);
-    let texts: Vec<String> = rt
-        .elements()
-        .iter()
-        .filter_map(|element| element.text.clone())
-        .collect();
     assert!(rt.find("preview-0").is_some(), "no preview block");
     let preview: Vec<String> = rt
         .elements()
@@ -444,11 +439,6 @@ fn the_backup_panel_previews_before_loading() {
     typ(&mut rt, "b");
     rt.frame(1.0 / 60.0);
 
-    let texts: Vec<String> = rt
-        .elements()
-        .iter()
-        .filter_map(|element| element.text.clone())
-        .collect();
     let preview: Vec<String> = rt
         .elements()
         .iter()
@@ -519,6 +509,137 @@ fn escape_stops_the_monitor() {
     assert!(rt.state.monitor_stream.is_none());
     assert_eq!(rt.state.edit.mode, None);
     assert_eq!(rt.state.monitor_status, "stopped");
+}
+
+fn live_runtime(live: &str) -> (tempfile::TempDir, std::path::PathBuf, Runtime<State>) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let conf = dir.path().join("default.conf");
+    std::fs::write(&conf, CONF).expect("write");
+    let etc = dir.path().join("etc");
+    std::fs::create_dir_all(&etc).expect("etc");
+    std::fs::write(etc.join("default.conf"), live).expect("live");
+    let state = State::load(Paths {
+        conf: conf.clone(),
+        install: conf.with_file_name("install.sh"),
+        etc,
+    })
+    .expect("load");
+    let mut rt = Runtime::new(state, view, (980.0, 760.0), Env::new(true, 1.0));
+    rt.on_key = Some(on_key);
+    rt.poll = Some(caps_gui::ui::poll_hook);
+    rt.frame(0.0);
+    (dir, conf, rt)
+}
+
+fn script(path: &std::path::Path, body: &str) {
+    std::fs::write(path, body).expect("write script");
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path).expect("stat").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("chmod");
+}
+
+#[test]
+fn a_opens_the_apply_review_with_the_diff() {
+    let (_dir, _conf, mut rt) = live_runtime(&CONF.replace("left = home", "left = end"));
+    typ(&mut rt, "A");
+    assert_eq!(rt.state.edit.mode, Some(Mode::Apply));
+    let texts: Vec<String> = rt
+        .elements()
+        .iter()
+        .filter_map(|element| element.text.clone())
+        .collect();
+    assert!(texts.iter().any(|text| text.contains("-left = end")), "{texts:?}");
+    assert!(texts.iter().any(|text| text.contains("+left = home")), "{texts:?}");
+}
+
+#[test]
+fn a_with_nothing_to_apply_says_so() {
+    let (_dir, _conf, mut rt) = live_runtime(CONF);
+    typ(&mut rt, "A");
+    assert_eq!(rt.state.edit.mode, None);
+    assert_eq!(rt.state.status, "No differences; nothing to apply.");
+}
+
+#[test]
+fn enter_applies_through_the_helper() {
+    let (dir, conf, mut rt) = live_runtime(&CONF.replace("left = home", "left = end"));
+    let received = dir.path().join("received.conf");
+    let stub = dir.path().join("apply-stub");
+    script(
+        &stub,
+        &format!("#!/bin/sh\ncat > '{}'\nexit 0\n", received.display()),
+    );
+    rt.state.privilege = caps_gui::keyd::privilege::Priv::Stub(stub);
+
+    typ(&mut rt, "A");
+    press(&mut rt, Key::Enter);
+
+    assert_eq!(rt.state.status, "Saved and applied.");
+    assert!(!rt.state.dirty);
+    // The helper received the buffer, and the file on disk matches it, so the next launch
+    // cannot load the old bindings and push them back.
+    assert_eq!(std::fs::read_to_string(&received).expect("received"), rt.state.text);
+    assert_eq!(std::fs::read_to_string(&conf).expect("conf"), rt.state.text);
+}
+
+#[test]
+fn a_rejected_apply_shows_the_reason() {
+    let (dir, _conf, mut rt) = live_runtime(&CONF.replace("left = home", "left = end"));
+    let stub = dir.path().join("apply-stub");
+    script(&stub, "#!/bin/sh\ncat > /dev/null\necho 'invalid key or action' >&2\nexit 1\n");
+    rt.state.privilege = caps_gui::keyd::privilege::Priv::Stub(stub);
+
+    typ(&mut rt, "A");
+    press(&mut rt, Key::Enter);
+
+    assert_eq!(rt.state.edit.mode, Some(Mode::Apply));
+    assert!(rt.state.edit.error.contains("invalid key or action"), "{}", rt.state.edit.error);
+}
+
+#[test]
+fn a_long_review_keeps_the_warnings_first_and_marks_the_overflow() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let conf = dir.path().join("default.conf");
+    // The buffer has a root-running binding, so the review carries a warning.
+    std::fs::write(
+        &conf,
+        "[main]\ncapslock = overload(nav, capslock)\n\n[nav]\nspace = command(runuser -u quzma -- /bin/true)\n",
+    )
+    .expect("write");
+    let etc = dir.path().join("etc");
+    std::fs::create_dir_all(&etc).expect("etc");
+    // The live config differs in forty bindings, so the diff is far longer than the panel.
+    let mut live = String::from("[main]\ncapslock = overload(nav, capslock)\n\n[nav]\n");
+    for index in 0..40 {
+        live.push_str(&format!("k{index} = esc\n"));
+    }
+    std::fs::write(etc.join("default.conf"), live).expect("live");
+
+    let state = State::load(Paths {
+        conf: conf.clone(),
+        install: conf.with_file_name("install.sh"),
+        etc,
+    })
+    .expect("load");
+    let mut rt = Runtime::new(state, view, (980.0, 760.0), Env::new(true, 1.0));
+    rt.on_key = Some(on_key);
+    rt.poll = Some(caps_gui::ui::poll_hook);
+    rt.frame(0.0);
+
+    typ(&mut rt, "A");
+    assert_eq!(rt.state.edit.mode, Some(Mode::Apply));
+    let texts: Vec<String> = rt
+        .elements()
+        .iter()
+        .filter_map(|element| element.text.clone())
+        .collect();
+    // The warning is the first row, so no diff length can push it off the panel.
+    assert!(texts.iter().any(|text| text.contains("WARN space")), "{texts:?}");
+    assert_eq!(rt.state.edit.apply_lines[0], "Warnings:");
+    // And the panel says how much it is not showing.
+    let marker = texts.iter().find(|text| text.contains("more lines"));
+    assert!(marker.is_some(), "{texts:?}");
 }
 
 #[test]
