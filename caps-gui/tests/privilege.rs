@@ -69,7 +69,7 @@ fn polkit_runs_the_installed_helper() {
 #[test]
 fn askpass_sets_sudo_askpass() {
     let askpass = PathBuf::from("/usr/libexec/caps-gui-askpass");
-    let mut cmd = command(&Priv::SudoAskpass(askpass.clone()), Helper::Monitor);
+    let cmd = command(&Priv::SudoAskpass(askpass.clone()), Helper::Monitor);
     assert_eq!(cmd.get_program(), "sudo");
     let args: Vec<_> = cmd.get_args().collect();
     assert_eq!(args, vec!["-A", "/usr/libexec/caps-gui-monitor"]);

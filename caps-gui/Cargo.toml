@@ -6,6 +6,7 @@ license = "MIT"
 description = "A native editor for the keyd Caps Lock layer"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 regex = "1"
 similar = "2"
 tempfile = "3"
