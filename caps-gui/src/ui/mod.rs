@@ -42,6 +42,10 @@ pub fn select_key(s: &mut State, key: &str) {
 
 /// Validate and write the config.
 pub fn save(s: &mut State) {
+    if let Some(error) = &s.load_error {
+        s.status = format!("not saving: {error}");
+        return;
+    }
     match (s.checker)(&s.text) {
         Ok(CheckOutcome::Rejected(message)) => s.status = format!("keyd rejects this: {message}"),
         Err(error) => s.status = format!("could not run keyd check: {error}"),
@@ -86,6 +90,10 @@ pub struct State {
     pub monitor_command: Option<Vec<String>>,
     /// How an apply asks for root; `run` fills it from the environment.
     pub privilege: crate::keyd::privilege::Priv,
+    /// Set when the config could not be read: saving and applying are refused.
+    pub load_error: Option<String>,
+    /// Set by the first `q` with unsaved edits; the second one quits.
+    pub quit_armed: bool,
 }
 
 impl Default for State {
@@ -109,17 +117,25 @@ impl Default for State {
             waker: None,
             monitor_command: None,
             privilege: crate::keyd::privilege::Priv::SudoTty,
+            load_error: None,
+            quit_armed: false,
         }
     }
 }
 
 impl State {
-    /// Load the checkout's config.
-    pub fn load(paths: Paths) -> std::io::Result<Self> {
-        let text = std::fs::read_to_string(&paths.conf)?;
+    /// Load the checkout's config; a failure is kept in `load_error` so the window can say so
+    /// and refuse to save or apply over it.
+    pub fn load(paths: Paths) -> Self {
         let mut state = Self { paths, ..Self::default() };
-        state.apply_text(text);
-        Ok(state)
+        match std::fs::read_to_string(&state.paths.conf) {
+            Ok(text) => state.apply_text(text),
+            Err(error) => {
+                state.load_error = Some(format!("cannot read {}: {error}", state.paths.conf.display()));
+                state.status = state.load_error.clone().unwrap_or_default();
+            }
+        }
+        state
     }
 
     /// Read the config again, reporting a failure in the status line.
@@ -266,6 +282,10 @@ pub fn view(s: &State, _: &mut Cx<State>) -> El {
 
 /// Keys: arrows and j/k move, `/` filters, Enter edits, d deletes, s saves, u/U undo/redo, q quits.
 pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    // Any key but q means the user is still working: the next q must warn again.
+    if !matches!(&ev.key, Key::Text(typed) if typed == "q") {
+        s.quit_armed = false;
+    }
     if s.edit.is_open() {
         return edit::on_key(s, ev);
     }
@@ -372,8 +392,17 @@ pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
             s.selected = 0;
             true
         }
+        Key::Text(typed) if typed == "a" => {
+            open_capture(s);
+            true
+        }
         Key::Text(typed) if typed == "q" => {
-            tx.quit();
+            if s.dirty && !s.quit_armed {
+                s.quit_armed = true;
+                s.status = "Unsaved changes — press q again to quit, or s to save.".to_string();
+            } else {
+                tx.quit();
+            }
             true
         }
         _ => false,
@@ -385,22 +414,40 @@ pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
 /// From a `.desktop` launch there is no terminal and no cached sudo credentials, so this goes
 /// through the polkit helper. `KEYMAP_MONITOR_CMD` stays the test and verify override.
 pub fn open_monitor(s: &mut State) {
-    let waker = s.waker.clone();
-    let stream = if let Some(command) = s.monitor_command.clone() {
-        crate::keyd::system::MonitorStream::spawn_with(&command, waker)
-    } else if std::env::var_os("KEYMAP_MONITOR_CMD").is_some() {
-        let (argv, _) = crate::keyd::system::monitor_command();
-        crate::keyd::system::MonitorStream::spawn_with(&argv, waker)
-    } else {
-        crate::keyd::privilege::spawn_monitor(&crate::keyd::privilege::detect(), waker)
-    };
-    match stream {
+    match start_stream(s) {
         Ok(stream) => {
             s.monitor_stream = Some(stream);
             s.monitor_status = "monitoring".to_string();
             s.edit.mode = Some(edit::Mode::Monitor);
         }
         Err(error) => s.status = format!("cannot start keyd monitor: {error}"),
+    }
+}
+
+/// Wait for one key press and open the picker for it.
+pub fn open_capture(s: &mut State) {
+    match start_stream(s) {
+        Ok(stream) => {
+            s.monitor_stream = Some(stream);
+            s.monitor_status = "capturing".to_string();
+            s.edit = edit::Edit {
+                mode: Some(edit::Mode::Capture),
+                ..edit::Edit::default()
+            };
+        }
+        Err(error) => s.status = format!("cannot start keyd monitor: {error}"),
+    }
+}
+
+fn start_stream(s: &State) -> std::io::Result<crate::keyd::system::MonitorStream> {
+    let waker = s.waker.clone();
+    if let Some(command) = s.monitor_command.clone() {
+        crate::keyd::system::MonitorStream::spawn_with(&command, waker)
+    } else if std::env::var_os("KEYMAP_MONITOR_CMD").is_some() {
+        let (argv, _) = crate::keyd::system::monitor_command();
+        crate::keyd::system::MonitorStream::spawn_with(&argv, waker)
+    } else {
+        crate::keyd::privilege::spawn_monitor(&crate::keyd::privilege::detect(), waker)
     }
 }
 
@@ -411,11 +458,27 @@ pub fn poll_monitor(s: &mut State) -> bool {
         None => return false,
     };
     let mut changed = !lines.is_empty();
-    for line in lines {
-        s.monitor.record(&line, &s.binds);
+    let capturing = s.edit.mode == Some(edit::Mode::Capture);
+    let mut captured: Option<String> = None;
+    for line in &lines {
+        if capturing && captured.is_none() {
+            // Same rule as the TUI: the first key-down that is not Caps Lock. Modifiers are
+            // capturable, because `leftshift` and `rightalt` are valid `[nav]` keys.
+            captured = crate::keyd::system::parse_monitor_line(line);
+        }
+        s.monitor.record(line, &s.binds);
+    }
+    if let Some(key) = captured {
+        // One key is all a capture needs: stop the stream and pick an action for it.
+        s.monitor_stream = None;
+        s.monitor_status = format!("captured {key}");
+        edit::open_picker(s, &key);
+        return true;
     }
     if let Some(status) = status {
+        // The stream is over; dropping it stops the redraw requests.
         s.monitor_status = format!("exited: {status}");
+        s.monitor_stream = None;
         changed = true;
     }
     changed
@@ -433,11 +496,7 @@ fn setup(s: &mut State, waker: rune::Waker) {
 
 /// Open the window.
 pub fn run() {
-    let mut state = State::load(Paths::from_env()).unwrap_or_else(|error| {
-        let mut state = State::default();
-        state.status = format!("cannot read {}: {error}", state.paths.conf.display());
-        state
-    });
+    let mut state = State::load(Paths::from_env());
     state.privilege = crate::keyd::privilege::detect();
     rune::App::new(AppSpec::<State> {
         scenes: &[

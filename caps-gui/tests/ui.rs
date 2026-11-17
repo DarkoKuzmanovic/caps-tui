@@ -28,7 +28,6 @@ fn state_with(conf: &str) -> State {
         install: conf_path.with_file_name("install.sh"),
         etc: conf_path.with_file_name("etc"),
     })
-    .expect("load")
 }
 
 fn runtime_with(conf: &str) -> Runtime<State> {
@@ -361,8 +360,7 @@ fn b_loads_nav_from_a_backup() {
         conf: conf.clone(),
         install: conf.with_file_name("install.sh"),
         etc: etc.clone(),
-    })
-    .expect("load");
+    });
     let mut rt = Runtime::new(state, view, (980.0, 760.0), Env::new(true, 1.0));
     rt.on_key = Some(on_key);
     rt.frame(0.0);
@@ -431,8 +429,7 @@ fn the_backup_panel_previews_before_loading() {
         conf: conf.clone(),
         install: conf.with_file_name("install.sh"),
         etc: etc.clone(),
-    })
-    .expect("load");
+    });
     let mut rt = Runtime::new(state, view, (980.0, 760.0), Env::new(true, 1.0));
     rt.on_key = Some(on_key);
     rt.frame(0.0);
@@ -522,8 +519,7 @@ fn live_runtime(live: &str) -> (tempfile::TempDir, std::path::PathBuf, Runtime<S
         conf: conf.clone(),
         install: conf.with_file_name("install.sh"),
         etc,
-    })
-    .expect("load");
+    });
     let mut rt = Runtime::new(state, view, (980.0, 760.0), Env::new(true, 1.0));
     rt.on_key = Some(on_key);
     rt.poll = Some(caps_gui::ui::poll_hook);
@@ -620,8 +616,7 @@ fn a_long_review_keeps_the_warnings_first_and_marks_the_overflow() {
         conf: conf.clone(),
         install: conf.with_file_name("install.sh"),
         etc,
-    })
-    .expect("load");
+    });
     let mut rt = Runtime::new(state, view, (980.0, 760.0), Env::new(true, 1.0));
     rt.on_key = Some(on_key);
     rt.poll = Some(caps_gui::ui::poll_hook);
@@ -640,6 +635,69 @@ fn a_long_review_keeps_the_warnings_first_and_marks_the_overflow() {
     // And the panel says how much it is not showing.
     let marker = texts.iter().find(|text| text.contains("more lines"));
     assert!(marker.is_some(), "{texts:?}");
+}
+
+#[test]
+fn a_captures_a_key_from_the_monitor() {
+    let mut rt = runtime();
+    rt.state.monitor_command = Some(vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        "printf 'kbd\\tDaKai\\tcapslock down\\nkbd\\tDaKai\\tcapslock up\\nkbd\\tDaKai\\tq down\\n'; sleep 1"
+            .to_string(),
+    ]);
+    typ(&mut rt, "a");
+    assert_eq!(rt.state.edit.mode, Some(Mode::Capture));
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline && rt.state.edit.mode == Some(Mode::Capture) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        rt.frame(1.0 / 60.0);
+    }
+    // Caps Lock is filtered (it is the layer key); the next key opens the picker for it.
+    assert_eq!(rt.state.edit.mode, Some(Mode::Picker));
+    assert_eq!(rt.state.edit.key, "q");
+    assert!(rt.state.monitor_stream.is_none(), "the stream stops after one key");
+}
+
+#[test]
+fn a_missing_config_refuses_to_apply() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let conf = dir.path().join("missing.conf");
+    let state = State::load(Paths {
+        conf: conf.clone(),
+        install: conf.with_file_name("install.sh"),
+        etc: dir.path().join("etc"),
+    });
+    assert!(state.load_error.is_some());
+    let mut rt = Runtime::new(state, view, (980.0, 760.0), Env::new(true, 1.0));
+    rt.on_key = Some(on_key);
+    rt.poll = Some(caps_gui::ui::poll_hook);
+    rt.frame(0.0);
+
+    typ(&mut rt, "A");
+    assert_eq!(rt.state.edit.mode, None);
+    assert!(rt.state.status.starts_with("not applying:"), "{}", rt.state.status);
+    assert!(!conf.exists(), "nothing may be written over an unreadable config");
+}
+
+#[test]
+fn q_warns_again_after_more_editing() {
+    let mut rt = runtime();
+    // Make the buffer dirty without leaving the table.
+    typ(&mut rt, "d");
+    assert!(rt.state.dirty);
+
+    typ(&mut rt, "q");
+    assert!(rt.state.quit_armed);
+    assert!(rt.state.status.starts_with("Unsaved changes"));
+
+    // Any other key means work continues, so the warning must come back.
+    press(&mut rt, Key::Down);
+    assert!(!rt.state.quit_armed);
+    typ(&mut rt, "q");
+    assert!(rt.state.quit_armed);
+    assert!(rt.state.status.starts_with("Unsaved changes"));
 }
 
 #[test]

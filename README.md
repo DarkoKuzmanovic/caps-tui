@@ -41,7 +41,7 @@ Captured from the real Textual app with a temporary config and simulated monitor
 
 - Linux with [keyd](https://github.com/rvaiya/keyd) **2.6 or newer** for config validation, key capture/live output, and applying a config. The editor can open without keyd, but those integrations are unavailable.
 - Python **3.12+** and [uv](https://docs.astral.sh/uv/) to run the Textual UI. `keymap.py` declares Textual as a PEP 723 inline dependency, so uv supplies it without a project-wide install.
-- Rust **1.85+** to build the GUI (`caps-gui/`), which links [Rune](https://github.com/anomalyco/rune).
+- Rust **1.88+** to build the GUI (`caps-gui/`), which links [Rune](https://github.com/anomalyco/rune).
 - `sudo` for key capture/live monitoring and for installing or reloading `/etc/keyd/default.conf`.
 
 ## GUI (Rune)

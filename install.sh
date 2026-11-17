@@ -6,9 +6,26 @@ set -euo pipefail
 here=$(dirname "$(readlink -f "$0")")
 keyd_dir=${KEYMAP_ETC:-/etc/keyd}
 
+if [[ ${1-} == --install-gui ]]; then
+  if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 [--reload|--install-policy|--install-gui]" >&2
+    exit 2
+  fi
+  cargo build --release -p caps-gui
+  install -d "$HOME/.local/bin" "$HOME/.local/share/applications"
+  install -m 755 target/release/caps-gui "$HOME/.local/bin/caps-gui"
+  sed "s|^Exec=.*|Exec=$HOME/.local/bin/caps-gui|" caps-gui/caps-gui.desktop \
+    > "$HOME/.local/share/applications/caps-gui.desktop"
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$HOME/.local/share/applications" || true
+  fi
+  echo "OK. Installed $HOME/.local/bin/caps-gui and its desktop entry."
+  exit 0
+fi
+
 if [[ ${1-} == --install-policy ]]; then
   if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 [--reload|--install-policy]" >&2
+    echo "Usage: $0 [--reload|--install-policy|--install-gui]" >&2
     exit 2
   fi
   if [[ $EUID -ne 0 ]]; then
@@ -26,7 +43,7 @@ fi
 
 if [[ ${1-} == --reload ]]; then
   if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 [--reload|--install-policy]" >&2
+    echo "Usage: $0 [--reload|--install-policy|--install-gui]" >&2
     exit 2
   fi
   if [[ $EUID -ne 0 ]]; then

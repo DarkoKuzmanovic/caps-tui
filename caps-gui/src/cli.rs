@@ -30,18 +30,74 @@ pub struct Paths {
 }
 
 impl Paths {
-    /// Paths from the environment, defaulting to the current directory.
+    /// Paths from the environment.
+    ///
+    /// A `.desktop` launch starts in `$HOME`, so a cwd-relative default would open an empty
+    /// editor — and an apply from it would delete every live binding. The config is found next
+    /// to the binary, then in the checkout the binary was built from, then in the user's config
+    /// directory, and only then in the working directory.
     pub fn from_env() -> Self {
         Self {
             conf: std::env::var_os("CAPS_CONF")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("default.conf")),
+                .unwrap_or_else(default_conf),
             install: std::env::var_os("CAPS_INSTALL")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("install.sh")),
+                .unwrap_or_else(default_install),
             etc: keyd_etc_dir(),
         }
     }
+}
+
+/// The first `default.conf` that exists, in the order a launcher needs.
+fn default_conf() -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from));
+    default_conf_from(exe_dir.as_deref(), config_dir().as_deref())
+}
+
+/// `default_conf`, from explicit directories — the form tests use. No environment involved.
+pub fn default_conf_from(exe_dir: Option<&std::path::Path>, config: Option<&std::path::Path>) -> PathBuf {
+    if let Some(dir) = exe_dir {
+        for candidate in [dir.join("default.conf"), dir.join("../../default.conf")] {
+            if candidate.is_file() {
+                return std::fs::canonicalize(&candidate).unwrap_or(candidate);
+            }
+        }
+    }
+    if let Some(config) = config {
+        return config.join("default.conf");
+    }
+    PathBuf::from("default.conf")
+}
+
+/// `install.sh`, found the same way.
+fn default_install() -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from));
+    default_install_from(exe_dir.as_deref())
+}
+
+/// `default_install`, from an explicit directory — the form tests use.
+pub fn default_install_from(exe_dir: Option<&std::path::Path>) -> PathBuf {
+    if let Some(dir) = exe_dir {
+        for candidate in [dir.join("install.sh"), dir.join("../../install.sh")] {
+            if candidate.is_file() {
+                return std::fs::canonicalize(&candidate).unwrap_or(candidate);
+            }
+        }
+    }
+    PathBuf::from("install.sh")
+}
+
+/// `$XDG_CONFIG_HOME/caps-gui`, or `~/.config/caps-gui`.
+fn config_dir() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(xdg).join("caps-gui"));
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/caps-gui"))
 }
 
 #[derive(Debug, Parser)]

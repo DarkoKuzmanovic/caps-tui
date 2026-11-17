@@ -25,6 +25,7 @@ pub enum Mode {
     Backups,
     Monitor,
     Apply,
+    Capture,
 }
 
 /// Where a typed or chosen action lands.
@@ -314,6 +315,10 @@ fn commit_backup(s: &mut State, path: &std::path::Path) {
 
 /// Open the review: the live/editor diff plus the risk warnings.
 pub fn open_apply(s: &mut State) {
+    if let Some(error) = &s.load_error {
+        s.status = format!("not applying: {error}");
+        return;
+    }
     // The fallback is the *saved* file, not the buffer: with an unreadable /etc the diff would
     // otherwise be empty and the apply refused for the wrong reason.
     let saved = std::fs::read_to_string(&s.paths.conf).unwrap_or_default();
@@ -337,6 +342,15 @@ pub fn open_apply(s: &mut State) {
 
 /// Save the buffer, then send it to the apply helper and report what it said.
 fn apply_now(s: &mut State) {
+    if let Some(error) = &s.load_error {
+        s.edit.error = format!("not applying: {error}");
+        return;
+    }
+    // keyd gets the last word before anything touches /etc.
+    if let Err(reason) = validate(s, &s.text) {
+        s.edit.error = reason;
+        return;
+    }
     // The helper installs what it is handed, so the file must match it: otherwise the next
     // launch loads the old bindings and the next apply pushes them back.
     if let Err(error) = std::fs::write(&s.paths.conf, &s.text) {
@@ -591,6 +605,15 @@ pub fn on_key(s: &mut State, ev: &KeyEvent) -> bool {
             }
             _ => false,
         },
+        Mode::Capture => match &ev.key {
+            Key::Escape => {
+                s.monitor_stream = None;
+                s.edit.close();
+                s.status = "Capture cancelled.".to_string();
+                true
+            }
+            _ => false,
+        },
         Mode::Normal => false,
     }
 }
@@ -705,6 +728,7 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
         Mode::Backups => "Backups".to_string(),
         Mode::Monitor => "Live keyd output".to_string(),
         Mode::Apply => "Review and apply".to_string(),
+        Mode::Capture => "Capture a key".to_string(),
         Mode::Normal => String::new(),
     };
     body = body.child(text(title).font(type_::TITLE).color(t.text));
@@ -923,6 +947,18 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
             }
         }
         Mode::Monitor => {
+            let live = crate::keyd::system::read_live_config_in(&s.paths.etc, &s.text).0;
+            let matches_live = live == s.text;
+            body = body.child(
+                text(if matches_live {
+                    "editor matches the live config"
+                } else {
+                    "editor differs from the live config"
+                })
+                .key("monitor-live")
+                .font(type_::LABEL)
+                .color(t.text_secondary),
+            );
             body = body.child(
                 text(s.monitor_status.clone())
                     .key("monitor-status")
@@ -945,7 +981,7 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
         Mode::Apply => {
             let total = s.edit.apply_lines.len();
             let offset = s.edit.apply_offset.min(total.saturating_sub(1));
-            for (index, line) in s.edit.apply_lines.iter().skip(offset).take(24).enumerate() {
+            for (index, line) in s.edit.apply_lines.iter().skip(offset).take(12).enumerate() {
                 body = body.child(
                     text(line.clone())
                         .key(format!("apply-{index}"))
@@ -953,9 +989,9 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
                         .color(t.text),
                 );
             }
-            if offset + 24 < total {
+            if offset + 12 < total {
                 body = body.child(
-                    text(format!("… {} more lines", total - offset - 24))
+                    text(format!("… {} more lines", total - offset - 12))
                         .key("apply-more")
                         .font(type_::SECTION)
                         .color(t.text_secondary),
@@ -963,6 +999,19 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
             }
             body = body.child(
                 text("↑↓ scroll · Enter applies with root · Esc cancels")
+                    .font(type_::SECTION)
+                    .color(t.text_secondary),
+            );
+        }
+        Mode::Capture => {
+            body = body.child(
+                text("Press the key by itself — do not hold Caps.")
+                    .key("capture-hint")
+                    .font(type_::BODY)
+                    .color(t.text),
+            );
+            body = body.child(
+                text("keyd reports its own output, so the key arrives as keyd sees it · Esc cancels")
                     .font(type_::SECTION)
                     .color(t.text_secondary),
             );
