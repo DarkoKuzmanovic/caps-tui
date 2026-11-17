@@ -41,7 +41,43 @@ Captured from the real Textual app with a temporary config and simulated monitor
 
 - Linux with [keyd](https://github.com/rvaiya/keyd) **2.6 or newer** for config validation, key capture/live output, and applying a config. The editor can open without keyd, but those integrations are unavailable.
 - Python **3.12+** and [uv](https://docs.astral.sh/uv/) to run the Textual UI. `keymap.py` declares Textual as a PEP 723 inline dependency, so uv supplies it without a project-wide install.
+- Rust **1.85+** to build the GUI (`caps-gui/`), which links [Rune](https://github.com/anomalyco/rune).
 - `sudo` for key capture/live monitoring and for installing or reloading `/etc/keyd/default.conf`.
+
+## GUI (Rune)
+
+`caps-gui/` is a native window on [Rune](https://github.com/anomalyco/rune): the same `[nav]` layer, the same keyboard map, the same packs and macros, without a terminal.
+
+```sh
+cargo run -p caps-gui            # the window
+cargo run -p caps-gui -- list    # the same commands as keymap.py
+cargo test --no-default-features # the core, no GPU stack needed
+```
+
+| Key | Action |
+| --- | --- |
+| `↑`/`↓`, `j`/`k` | Move through the bindings |
+| `/` | Filter by key, action or description |
+| `Enter` / `e` | Pick an action for the selected binding |
+| `d` | Delete the binding |
+| `t` | Short Caps press action |
+| `p` | Preset packs, previewed before they merge |
+| `b` | Timestamped backups, previewed before they load |
+| `l` | Live `keyd monitor` panel |
+| `A` | Review the live/editor diff (warnings first) and apply |
+| `s` | Validate with `keyd check` and save |
+| `u` / `U` | Undo / redo |
+| `q` | Quit |
+
+Every commit — a picked action, a custom action, a macro, a tap, a pack, a backup — renders the candidate config and asks `keyd check` first; a rejection keeps the editor open with the reason.
+
+Clicking a cap on the map selects its binding, or opens the picker when the key has none.
+
+**Applying from a window.** A `.desktop` launch has no terminal, so `sudo` cannot prompt. `A` goes through two root-owned helpers in `/usr/libexec` (`caps-gui-monitor`, `caps-gui-apply`) authorised by one polkit action, installed with `sudo bash install.sh --install-policy`. The apply helper takes the config on stdin, validates a temp copy **before** `/etc/keyd` is touched, then backs up, installs and reloads; it never executes a file from this repository. The action is `auth_admin`, so every apply asks.
+
+**Building it.** Rune is pinned to a `dev` rev. It vendors five patched crates and its own note says apps must patch them too, so the workspace root carries the same `[patch.crates-io]` entries pointed at that rev — cargo finds the vendored packages by name, so no sibling checkout is needed. `cargo test --no-default-features` skips Rune entirely.
+
+The Textual TUI stays the reference until the GUI has feature parity; both read the same `default.conf`.
 
 ## Install & first run
 

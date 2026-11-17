@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=caps-gui
+GenericName=keyd Caps Lock editor
+Comment=Edit the keyd Caps Lock layer
+Exec=caps-gui
+Icon=input-keyboard
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=keyd;keyboard;capslock;keymap;

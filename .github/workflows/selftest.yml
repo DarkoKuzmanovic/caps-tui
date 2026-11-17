@@ -27,3 +27,39 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.1
       - name: headless Textual UI tests
         run: uv run keymap.py --uitest
+
+  # The Rust port's core: no Rune, no GPU, no windowing stack — the config model, the macro
+  # builder, the rules, the system glue and the CLI, in seconds.
+  caps-gui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: test the core
+        run: cargo test --no-default-features
+      - name: clippy
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+      - name: the CLI still matches the Python's list
+        run: |
+          cargo build --no-default-features
+          diff <(./target/debug/caps-gui list) <(python3 keymap.py list)
+
+  # The Rune window needs a Vulkan device; GitHub's runners have lavapipe, and this job is kept
+  # separate so a runner without one fails here and not in the core job.
+  caps-gui-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: install the Vulkan loader and lavapipe
+        run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+      - name: headless UI tests
+        run: cargo test --features ui --test ui
+      - name: every screen renders
+        run: |
+          for scene in picker macro monitor; do
+            ./target/debug/caps-gui --snap "/tmp/$scene.png" --scene "$scene" --size 980x760
+          done
+
