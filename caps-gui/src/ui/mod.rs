@@ -256,6 +256,49 @@ fn binding_row(t: &tok::Theme, binding: &Binding, index: usize, selected: bool) 
         .child(text(description.to_string()).font(type_::LABEL).grow(1.0).color(muted))
 }
 
+/// One hint: the key as a small cap, then what it does.
+fn hint(t: &tok::Theme, key: &str, label: &str, primary: bool) -> El {
+    let key_ink = if primary { t.text } else { t.text_secondary };
+    row()
+        .gap(5.0)
+        .center_y()
+        .child(
+            el().h(17.0)
+                .px(5.0)
+                .radius(4.0)
+                .fill(t.control_off)
+                .center()
+                .child(text(key.to_string()).font(type_::SECTION).color(key_ink)),
+        )
+        .child(text(label.to_string()).font(type_::SECTION).color(t.text_secondary))
+}
+
+/// The hints under the table: the everyday keys first, the rest dimmer.
+fn hints(t: &tok::Theme) -> El {
+    let primary = row()
+        .key("hints-primary")
+        .gap(14.0)
+        .center_y()
+        .child(hint(t, "↑↓", "move", true))
+        .child(hint(t, "/", "filter", true))
+        .child(hint(t, "Enter", "edit", true))
+        .child(hint(t, "a", "capture", true))
+        .child(hint(t, "s", "save", true))
+        .child(hint(t, "A", "apply", true))
+        .child(hint(t, "q", "quit", true));
+    let secondary = row()
+        .key("hints-secondary")
+        .gap(14.0)
+        .center_y()
+        .child(hint(t, "d", "delete", false))
+        .child(hint(t, "t", "tap", false))
+        .child(hint(t, "p", "packs", false))
+        .child(hint(t, "b", "backups", false))
+        .child(hint(t, "l", "monitor", false))
+        .child(hint(t, "u/U", "undo/redo", false));
+    col().w_full().gap(6.0).child(primary).child(secondary)
+}
+
 /// The window.
 pub fn view(s: &State, _: &mut Cx<State>) -> El {
     let t = tok::theme(true);
@@ -291,11 +334,17 @@ pub fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(text(s.conf_label()).font(type_::SECTION).color(t.text_secondary));
 
     let footer = if s.filtering {
-        format!("/{}", s.filter)
+        text(format!("/{}", s.filter)).font(type_::BODY).color(t.text)
     } else if s.filter.is_empty() {
-        "↑↓ move · / filter · a capture · Enter edit · d delete · t tap · p packs · b backups · l monitor · A apply · s save · u/U undo · q quit".to_string()
+        hints(&t)
     } else {
-        format!("filter {:?} · Esc clears · Enter edit · s save", s.filter)
+        row()
+            .gap(14.0)
+            .center_y()
+            .child(text(format!("filter {:?}", s.filter)).font(type_::SECTION).color(t.text))
+            .child(hint(&t, "Esc", "clear", true))
+            .child(hint(&t, "Enter", "edit", true))
+            .child(hint(&t, "s", "save", true))
     };
 
     let body = if s.edit.is_open() {
@@ -315,7 +364,7 @@ pub fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(map::map(s, &t))
         .child(el().h(1.0).w_full().fill(t.separator))
         .child(body)
-        .child(text(footer).font(type_::SECTION).color(t.text_secondary))
+        .child(footer)
         .child(text(s.status.clone()).font(type_::SECTION).color(t.text_secondary))
 }
 
