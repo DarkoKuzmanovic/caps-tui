@@ -1,0 +1,11 @@
+[package]
+name = "caps-gui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "A native editor for the keyd Caps Lock layer"
+
+[dependencies]
+regex = "1"
+similar = "2"
+thiserror = "2"

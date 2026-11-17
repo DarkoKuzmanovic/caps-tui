@@ -17,3 +17,6 @@ dist/
 # Project
 *.log
 *.svg.tmp
+
+# Rust
+/target/
