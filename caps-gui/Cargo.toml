@@ -8,4 +8,5 @@ description = "A native editor for the keyd Caps Lock layer"
 [dependencies]
 regex = "1"
 similar = "2"
+tempfile = "3"
 thiserror = "2"
