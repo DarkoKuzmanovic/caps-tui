@@ -947,17 +947,16 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
             }
         }
         Mode::Monitor => {
-            let live = crate::keyd::system::read_live_config_in(&s.paths.etc, &s.text).0;
-            let matches_live = live == s.text;
+            let note = if s.dirty {
+                format!("{} · unsaved edits", s.live_state.label())
+            } else {
+                s.live_state.label().to_string()
+            };
             body = body.child(
-                text(if matches_live {
-                    "editor matches the live config"
-                } else {
-                    "editor differs from the live config"
-                })
-                .key("monitor-live")
-                .font(type_::LABEL)
-                .color(t.text_secondary),
+                text(note)
+                    .key("monitor-live")
+                    .font(type_::LABEL)
+                    .color(t.text_secondary),
             );
             body = body.child(
                 text(s.monitor_status.clone())

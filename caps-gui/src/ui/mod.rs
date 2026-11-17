@@ -53,6 +53,7 @@ pub fn save(s: &mut State) {
             Ok(()) => {
                 s.dirty = false;
                 s.status = "Saved.".to_string();
+                refresh_live(s);
             }
             Err(error) => {
                 s.status = format!("cannot write {}: {error}", s.paths.conf.display());
@@ -94,6 +95,32 @@ pub struct State {
     pub load_error: Option<String>,
     /// Set by the first `q` with unsaved edits; the second one quits.
     pub quit_armed: bool,
+    /// Whether the buffer matches the live config, computed when the panel opens and after a
+    /// save or apply — not per frame, which would read `/etc/keyd` on every redraw.
+    pub live_state: LiveState,
+    /// When a capture gives up.
+    pub capture_deadline: Option<std::time::Instant>,
+}
+
+/// How the buffer compares with the live config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LiveState {
+    #[default]
+    Unknown,
+    Matches,
+    Differs,
+    Unreadable,
+}
+
+impl LiveState {
+    pub fn label(self) -> &'static str {
+        match self {
+            LiveState::Unknown => "",
+            LiveState::Matches => "editor matches the live config",
+            LiveState::Differs => "editor differs from the live config",
+            LiveState::Unreadable => "live config unreadable",
+        }
+    }
 }
 
 impl Default for State {
@@ -119,6 +146,8 @@ impl Default for State {
             privilege: crate::keyd::privilege::Priv::SudoTty,
             load_error: None,
             quit_armed: false,
+            live_state: LiveState::Unknown,
+            capture_deadline: None,
         }
     }
 }
@@ -129,7 +158,16 @@ impl State {
     pub fn load(paths: Paths) -> Self {
         let mut state = Self { paths, ..Self::default() };
         match std::fs::read_to_string(&state.paths.conf) {
-            Ok(text) => state.apply_text(text),
+            Ok(text) => {
+                state.apply_text(text);
+                let parked = unsaved_path(&state.paths.conf);
+                if parked.is_file() {
+                    state.status = format!(
+                        "unsaved edits from the last session are in {}",
+                        parked.display()
+                    );
+                }
+            }
             Err(error) => {
                 state.load_error = Some(format!("cannot read {}: {error}", state.paths.conf.display()));
                 state.status = state.load_error.clone().unwrap_or_default();
@@ -254,7 +292,7 @@ pub fn view(s: &State, _: &mut Cx<State>) -> El {
     let footer = if s.filtering {
         format!("/{}", s.filter)
     } else if s.filter.is_empty() {
-        "↑↓ move · / filter · Enter edit · d delete · t tap · p packs · b backups · l monitor · A apply · s save · u/U undo · q quit".to_string()
+        "↑↓ move · / filter · a capture · Enter edit · d delete · t tap · p packs · b backups · l monitor · A apply · s save · u/U undo · q quit".to_string()
     } else {
         format!("filter {:?} · Esc clears · Enter edit · s save", s.filter)
     };
@@ -409,11 +447,24 @@ pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
 }
 
+/// Compare the buffer with the live config, once.
+pub fn refresh_live(s: &mut State) {
+    let (live, unreadable) = crate::keyd::system::read_live_config_in(&s.paths.etc, &s.text);
+    s.live_state = if unreadable {
+        LiveState::Unreadable
+    } else if live == s.text {
+        LiveState::Matches
+    } else {
+        LiveState::Differs
+    };
+}
+
 /// Start the live monitor and open its panel.
 ///
 /// From a `.desktop` launch there is no terminal and no cached sudo credentials, so this goes
 /// through the polkit helper. `KEYMAP_MONITOR_CMD` stays the test and verify override.
 pub fn open_monitor(s: &mut State) {
+    refresh_live(s);
     match start_stream(s) {
         Ok(stream) => {
             s.monitor_stream = Some(stream);
@@ -426,10 +477,13 @@ pub fn open_monitor(s: &mut State) {
 
 /// Wait for one key press and open the picker for it.
 pub fn open_capture(s: &mut State) {
+    // One stream at a time: the `l` panel and a capture must not share one.
+    s.monitor_stream = None;
     match start_stream(s) {
         Ok(stream) => {
             s.monitor_stream = Some(stream);
             s.monitor_status = "capturing".to_string();
+            s.capture_deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(10));
             s.edit = edit::Edit {
                 mode: Some(edit::Mode::Capture),
                 ..edit::Edit::default()
@@ -459,6 +513,14 @@ pub fn poll_monitor(s: &mut State) -> bool {
     };
     let mut changed = !lines.is_empty();
     let capturing = s.edit.mode == Some(edit::Mode::Capture);
+    if capturing && s.capture_deadline.is_some_and(|deadline| std::time::Instant::now() > deadline) {
+        s.monitor_stream = None;
+        s.capture_deadline = None;
+        s.monitor_status = "capture timed out".to_string();
+        s.status = "Capture timed out; press a again, or Enter to pick an action.".to_string();
+        s.edit.close();
+        return true;
+    }
     let mut captured: Option<String> = None;
     for line in &lines {
         if capturing && captured.is_none() {
@@ -471,6 +533,7 @@ pub fn poll_monitor(s: &mut State) -> bool {
     if let Some(key) = captured {
         // One key is all a capture needs: stop the stream and pick an action for it.
         s.monitor_stream = None;
+        s.capture_deadline = None;
         s.monitor_status = format!("captured {key}");
         edit::open_picker(s, &key);
         return true;
@@ -492,6 +555,18 @@ pub fn poll_hook(s: &mut State, _seconds: f64, _tx: &mut Tx) -> bool {
 /// Called once before the first frame: keep Rune's waker so the monitor can ask for a redraw.
 fn setup(s: &mut State, waker: rune::Waker) {
     s.waker = Some(waker);
+}
+
+/// Where unsaved edits are parked when the window closes.
+pub fn unsaved_path(conf: &std::path::Path) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("{}.unsaved", conf.display()))
+}
+
+/// The close button cannot be vetoed, so the buffer is parked beside the config instead.
+fn on_close(s: &mut State, _tx: &mut Tx) {
+    if s.dirty {
+        let _ = std::fs::write(unsaved_path(&s.paths.conf), &s.text);
+    }
 }
 
 /// Open the window.
@@ -533,5 +608,6 @@ pub fn run() {
         ..AppSpec::new("caps-gui", (980.0, 760.0), State::default, view)
     })
     .init(move || state)
+    .on_close(on_close)
     .run();
 }

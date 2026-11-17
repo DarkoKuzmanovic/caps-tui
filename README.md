@@ -59,6 +59,7 @@ cargo test --no-default-features # the core, no GPU stack needed
 | `↑`/`↓`, `j`/`k` | Move through the bindings |
 | `/` | Filter by key, action or description |
 | `Enter` / `e` | Pick an action for the selected binding |
+| `a` | Capture a key by pressing it, then pick its action |
 | `d` | Delete the binding |
 | `t` | Short Caps press action |
 | `p` | Preset packs, previewed before they merge |
