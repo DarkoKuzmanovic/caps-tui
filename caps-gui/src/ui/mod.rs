@@ -53,6 +53,7 @@ pub fn save(s: &mut State) {
             Ok(()) => {
                 s.dirty = false;
                 s.status = "Saved.".to_string();
+                let _ = std::fs::remove_file(unsaved_path(&s.paths.conf));
                 refresh_live(s);
             }
             Err(error) => {
@@ -98,8 +99,8 @@ pub struct State {
     /// Whether the buffer matches the live config, computed when the panel opens and after a
     /// save or apply — not per frame, which would read `/etc/keyd` on every redraw.
     pub live_state: LiveState,
-    /// When a capture gives up.
-    pub capture_deadline: Option<std::time::Instant>,
+    /// Seconds since the app started when the capture began; the timeout rides Rune's clock.
+    pub capture_started: Option<f64>,
 }
 
 /// How the buffer compares with the live config.
@@ -147,7 +148,7 @@ impl Default for State {
             load_error: None,
             quit_armed: false,
             live_state: LiveState::Unknown,
-            capture_deadline: None,
+            capture_started: None,
         }
     }
 }
@@ -431,7 +432,10 @@ pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
             true
         }
         Key::Text(typed) if typed == "a" => {
-            open_capture(s);
+            let now = tx.clock();
+            open_capture(s, now);
+            // An idle window draws no frames, so the timeout needs a timer, not a poll.
+            tx.wake_at(now + 10.0);
             true
         }
         Key::Text(typed) if typed == "q" => {
@@ -476,14 +480,14 @@ pub fn open_monitor(s: &mut State) {
 }
 
 /// Wait for one key press and open the picker for it.
-pub fn open_capture(s: &mut State) {
+pub fn open_capture(s: &mut State, now: f64) {
     // One stream at a time: the `l` panel and a capture must not share one.
     s.monitor_stream = None;
     match start_stream(s) {
         Ok(stream) => {
             s.monitor_stream = Some(stream);
             s.monitor_status = "capturing".to_string();
-            s.capture_deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(10));
+            s.capture_started = Some(now);
             s.edit = edit::Edit {
                 mode: Some(edit::Mode::Capture),
                 ..edit::Edit::default()
@@ -513,14 +517,6 @@ pub fn poll_monitor(s: &mut State) -> bool {
     };
     let mut changed = !lines.is_empty();
     let capturing = s.edit.mode == Some(edit::Mode::Capture);
-    if capturing && s.capture_deadline.is_some_and(|deadline| std::time::Instant::now() > deadline) {
-        s.monitor_stream = None;
-        s.capture_deadline = None;
-        s.monitor_status = "capture timed out".to_string();
-        s.status = "Capture timed out; press a again, or Enter to pick an action.".to_string();
-        s.edit.close();
-        return true;
-    }
     let mut captured: Option<String> = None;
     for line in &lines {
         if capturing && captured.is_none() {
@@ -533,7 +529,7 @@ pub fn poll_monitor(s: &mut State) -> bool {
     if let Some(key) = captured {
         // One key is all a capture needs: stop the stream and pick an action for it.
         s.monitor_stream = None;
-        s.capture_deadline = None;
+        s.capture_started = None;
         s.monitor_status = format!("captured {key}");
         edit::open_picker(s, &key);
         return true;
@@ -548,7 +544,17 @@ pub fn poll_monitor(s: &mut State) -> bool {
 }
 
 /// The per-frame hook Rune calls: drains the monitor and asks for a redraw when it changed.
-pub fn poll_hook(s: &mut State, _seconds: f64, _tx: &mut Tx) -> bool {
+pub fn poll_hook(s: &mut State, seconds: f64, _tx: &mut Tx) -> bool {
+    if s.edit.mode == Some(edit::Mode::Capture)
+        && s.capture_started.is_some_and(|start| seconds - start > 10.0)
+    {
+        s.monitor_stream = None;
+        s.capture_started = None;
+        s.monitor_status = "capture timed out".to_string();
+        s.status = "Capture timed out; press a again, or Enter to pick an action.".to_string();
+        s.edit.close();
+        return true;
+    }
     poll_monitor(s)
 }
 

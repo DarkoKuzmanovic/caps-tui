@@ -363,6 +363,7 @@ fn apply_now(s: &mut State) {
         Ok(outcome) if outcome.status.success() => {
             s.edit.close();
             s.status = "Saved and applied.".to_string();
+            let _ = std::fs::remove_file(super::unsaved_path(&s.paths.conf));
         }
         Ok(outcome) => {
             s.edit.error = if outcome.message.is_empty() {

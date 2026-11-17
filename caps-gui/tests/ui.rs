@@ -661,6 +661,26 @@ fn a_captures_a_key_from_the_monitor() {
 }
 
 #[test]
+fn a_capture_gives_up_after_ten_seconds() {
+    let mut rt = runtime();
+    rt.state.monitor_command = Some(vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        "sleep 30".to_string(),
+    ]);
+    typ(&mut rt, "a");
+    assert_eq!(rt.state.edit.mode, Some(Mode::Capture));
+
+    // A silent stream never wakes the window, so the timeout must ride the clock, not a poll.
+    for _ in 0..30 {
+        rt.frame(0.5);
+    }
+    assert_eq!(rt.state.edit.mode, None);
+    assert!(rt.state.status.contains("timed out"), "{}", rt.state.status);
+    assert!(rt.state.monitor_stream.is_none());
+}
+
+#[test]
 fn a_missing_config_refuses_to_apply() {
     let dir = tempfile::tempdir().expect("temp dir");
     let conf = dir.path().join("missing.conf");
