@@ -34,6 +34,7 @@ fn state_with(conf: &str) -> State {
 fn runtime_with(conf: &str) -> Runtime<State> {
     let mut rt = Runtime::new(state_with(conf), view, (980.0, 760.0), Env::new(true, 1.0));
     rt.on_key = Some(on_key);
+    rt.poll = Some(caps_gui::ui::poll_hook);
     rt.frame(0.0);
     rt
 }
@@ -457,6 +458,67 @@ fn the_backup_panel_previews_before_loading() {
     assert!(preview.iter().any(|text| text.contains("-left = home")), "{preview:?}");
     assert!(preview.iter().any(|text| text.contains("+left = end")), "{preview:?}");
     assert!(rt.state.text.contains("left = home"), "nothing loaded yet");
+}
+
+#[test]
+fn the_monitor_panel_shows_streamed_keys() {
+    let mut rt = runtime();
+    let command = vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        "printf 'kbd\\tDaKai\\tleftcontrol down\\nkbd\\tDaKai\\tleft down\\n'; sleep 0.1".to_string(),
+    ];
+    rt.state.monitor_stream =
+        Some(caps_gui::keyd::system::MonitorStream::spawn(&command).expect("spawn"));
+    rt.state.edit.mode = Some(Mode::Monitor);
+
+    // The poll hook drains the stream and asks for a redraw, exactly as the window does.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline && rt.state.monitor.events.is_empty() {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        rt.frame(1.0 / 60.0);
+    }
+
+    assert_eq!(rt.state.monitor.events.len(), 1);
+    assert_eq!(rt.state.monitor.events[0].key, "C-left");
+    let keys: Vec<String> = rt
+        .elements()
+        .iter()
+        .filter_map(|element| element.key.clone())
+        .collect();
+    assert!(keys.iter().any(|key| key.starts_with("monitor-")), "{keys:?}");
+}
+
+#[test]
+fn l_opens_the_monitor_panel() {
+    let mut rt = runtime();
+    rt.state.monitor_command = Some(vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        "printf 'kbd\tDaKai\tleftcontrol down\nkbd\tDaKai\tleft down\n'; sleep 1".to_string(),
+    ]);
+    typ(&mut rt, "l");
+    assert_eq!(rt.state.edit.mode, Some(Mode::Monitor));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline && rt.state.monitor.events.is_empty() {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(rt.state.monitor.events.len(), 1);
+    assert_eq!(rt.state.monitor.events[0].key, "C-left");
+}
+
+#[test]
+fn escape_stops_the_monitor() {
+    let mut rt = runtime();
+    let command = vec!["sh".to_string(), "-c".to_string(), "sleep 5".to_string()];
+    rt.state.monitor_stream =
+        Some(caps_gui::keyd::system::MonitorStream::spawn(&command).expect("spawn"));
+    rt.state.edit.mode = Some(Mode::Monitor);
+    press(&mut rt, Key::Escape);
+    assert!(rt.state.monitor_stream.is_none());
+    assert_eq!(rt.state.edit.mode, None);
+    assert_eq!(rt.state.monitor_status, "stopped");
 }
 
 #[test]

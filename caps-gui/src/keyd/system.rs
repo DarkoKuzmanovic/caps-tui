@@ -341,6 +341,10 @@ pub fn backup_entries(directory: Option<&Path>) -> Vec<BackupEntry> {
         .collect()
 }
 
+/// Called from a reader thread when new output arrives. Rune's `Waker` is this same type, so the
+/// UI can hand its own in without the core depending on Rune.
+pub type Waker = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 /// A live `keyd monitor` process read on background threads.
 pub struct MonitorStream {
     child: Child,
@@ -352,17 +356,21 @@ pub struct MonitorStream {
 
 impl MonitorStream {
     pub fn spawn(command: &[String]) -> std::io::Result<Self> {
+        Self::spawn_with(command, None)
+    }
+
+    pub fn spawn_with(command: &[String], waker: Option<Waker>) -> std::io::Result<Self> {
         let (program, args) = command
             .split_first()
             .ok_or_else(|| std::io::Error::other("empty monitor command"))?;
         let mut command = Command::new(program);
         command.args(args);
-        Self::from_command(command)
+        Self::from_command_with(command, waker)
     }
 
     /// Wrap an already-built command: same pipes, same process group, same bounded stop, so the
     /// privileged monitor path cannot drift from the unprivileged one.
-    pub fn from_command(mut command: Command) -> std::io::Result<Self> {
+    pub fn from_command_with(mut command: Command, waker: Option<Waker>) -> std::io::Result<Self> {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -383,10 +391,16 @@ impl MonitorStream {
         }
         for stream in readers {
             let sender = sender.clone();
+            let waker = waker.clone();
             std::thread::spawn(move || {
                 for line in BufReader::new(stream).lines().map_while(Result::ok) {
                     if sender.send(line).is_err() {
                         break;
+                    }
+                    // An idle window draws no frames, so the panel would freeze exactly when a
+                    // key arrives from another app. Ask the shell for one.
+                    if let Some(wake) = &waker {
+                        wake();
                     }
                 }
             });

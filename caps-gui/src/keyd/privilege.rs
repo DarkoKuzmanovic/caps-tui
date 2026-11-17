@@ -140,8 +140,11 @@ pub fn apply_text(how: &Priv, config: &str) -> std::io::Result<ApplyOutcome> {
 
 /// Start the monitor helper as a stream: same pipes, process group and bounded stop as the
 /// unprivileged path, so the panel behaves identically either way.
-pub fn spawn_monitor(how: &Priv) -> std::io::Result<super::system::MonitorStream> {
-    super::system::MonitorStream::from_command(command(how, Helper::Monitor))
+pub fn spawn_monitor(
+    how: &Priv,
+    waker: Option<super::system::Waker>,
+) -> std::io::Result<super::system::MonitorStream> {
+    super::system::MonitorStream::from_command_with(command(how, Helper::Monitor), waker)
 }
 
 fn which(binary: &str) -> Option<PathBuf> {

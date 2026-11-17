@@ -76,6 +76,14 @@ pub struct State {
     pub dirty: bool,
     /// How a candidate config is validated; tests swap in a stub.
     pub checker: fn(&str) -> std::io::Result<CheckOutcome>,
+    /// The live keyd stream, while the panel is open.
+    pub monitor_stream: Option<crate::keyd::system::MonitorStream>,
+    pub monitor: crate::keyd::monitor::MonitorLog,
+    pub monitor_status: String,
+    /// Rune's redraw waker, handed over in `setup`; the reader threads call it.
+    pub waker: Option<crate::keyd::system::Waker>,
+    /// Overrides how the monitor is started; tests and scripted runs set it.
+    pub monitor_command: Option<Vec<String>>,
 }
 
 impl Default for State {
@@ -93,6 +101,11 @@ impl Default for State {
             history: History::new(50),
             dirty: false,
             checker: check,
+            monitor_stream: None,
+            monitor: crate::keyd::monitor::MonitorLog::default(),
+            monitor_status: String::new(),
+            waker: None,
+            monitor_command: None,
         }
     }
 }
@@ -222,7 +235,7 @@ pub fn view(s: &State, _: &mut Cx<State>) -> El {
     let footer = if s.filtering {
         format!("/{}", s.filter)
     } else if s.filter.is_empty() {
-        "↑↓ move · / filter · Enter edit · d delete · s save · u/U undo/redo · q quit".to_string()
+        "↑↓ move · / filter · Enter edit · d delete · t tap · p packs · b backups · l monitor · s save · u/U undo · q quit".to_string()
     } else {
         format!("filter {:?} · Esc clears · Enter edit · s save", s.filter)
     };
@@ -331,6 +344,10 @@ pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
             edit::open_backups(s);
             true
         }
+        Key::Text(typed) if typed == "l" => {
+            open_monitor(s);
+            true
+        }
         Key::Text(typed) if typed == "s" => {
             save(s);
             true
@@ -356,6 +373,57 @@ pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
 }
 
+/// Start the live monitor and open its panel.
+///
+/// From a `.desktop` launch there is no terminal and no cached sudo credentials, so this goes
+/// through the polkit helper. `KEYMAP_MONITOR_CMD` stays the test and verify override.
+pub fn open_monitor(s: &mut State) {
+    let waker = s.waker.clone();
+    let stream = if let Some(command) = s.monitor_command.clone() {
+        crate::keyd::system::MonitorStream::spawn_with(&command, waker)
+    } else if std::env::var_os("KEYMAP_MONITOR_CMD").is_some() {
+        let (argv, _) = crate::keyd::system::monitor_command();
+        crate::keyd::system::MonitorStream::spawn_with(&argv, waker)
+    } else {
+        crate::keyd::privilege::spawn_monitor(&crate::keyd::privilege::detect(), waker)
+    };
+    match stream {
+        Ok(stream) => {
+            s.monitor_stream = Some(stream);
+            s.monitor_status = "monitoring".to_string();
+            s.edit.mode = Some(edit::Mode::Monitor);
+        }
+        Err(error) => s.status = format!("cannot start keyd monitor: {error}"),
+    }
+}
+
+/// Drain the live stream into the log; true when the window should redraw.
+pub fn poll_monitor(s: &mut State) -> bool {
+    let (lines, status) = match s.monitor_stream.as_mut() {
+        Some(stream) => stream.poll(),
+        None => return false,
+    };
+    let mut changed = !lines.is_empty();
+    for line in lines {
+        s.monitor.record(&line, &s.binds);
+    }
+    if let Some(status) = status {
+        s.monitor_status = format!("exited: {status}");
+        changed = true;
+    }
+    changed
+}
+
+/// The per-frame hook Rune calls: drains the monitor and asks for a redraw when it changed.
+pub fn poll_hook(s: &mut State, _seconds: f64, _tx: &mut Tx) -> bool {
+    poll_monitor(s)
+}
+
+/// Called once before the first frame: keep Rune's waker so the monitor can ask for a redraw.
+fn setup(s: &mut State, waker: rune::Waker) {
+    s.waker = Some(waker);
+}
+
 /// Open the window.
 pub fn run() {
     let state = State::load(Paths::from_env()).unwrap_or_else(|error| {
@@ -375,8 +443,25 @@ pub fn run() {
                     crate::keyd::macros::MacroStep::Key("enter".into()),
                 ];
             }),
+            ("monitor", |s: &mut State| {
+                let binds = s.binds.clone();
+                for line in [
+                    "kbd\tDaKai\tleftcontrol down",
+                    "kbd\tDaKai\tleft down",
+                    "kbd\tDaKai\tleft up",
+                    "kbd\tDaKai\tleftcontrol up",
+                    "kbd\tDaKai\tcapslock down",
+                    "kbd\tDaKai\tcapslock up",
+                ] {
+                    s.monitor.record(line, &binds);
+                }
+                s.monitor_status = "monitoring".to_string();
+                s.edit.mode = Some(edit::Mode::Monitor);
+            }),
         ],
         on_key: Some(on_key),
+        poll: Some(poll_hook),
+        setup: Some(setup),
         ..AppSpec::new("caps-gui", (980.0, 760.0), State::default, view)
     })
     .init(move || state)

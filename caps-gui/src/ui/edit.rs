@@ -23,6 +23,8 @@ pub enum Mode {
     Tap,
     Packs,
     Backups,
+    Monitor,
+    Apply,
 }
 
 /// Where a typed or chosen action lands.
@@ -74,6 +76,8 @@ pub struct Edit {
     pub pack: usize,
     pub backup: usize,
     pub backups: Vec<crate::keyd::system::BackupEntry>,
+    /// The diff and warnings shown before an apply.
+    pub apply_lines: Vec<String>,
 }
 
 impl Edit {
@@ -306,6 +310,48 @@ fn commit_backup(s: &mut State, path: &std::path::Path) {
     }
 }
 
+/// Open the review: the live/editor diff plus the risk warnings.
+pub fn open_apply(s: &mut State) {
+    let live = crate::keyd::system::read_live_config(&s.text).0;
+    let diff = crate::keyd::config::diff_lines(&live, &s.text, "live default.conf", "editor");
+    if diff.is_empty() {
+        s.status = "No differences; nothing to apply.".to_string();
+        return;
+    }
+    let mut lines = diff;
+    lines.extend(crate::keyd::rules::warning_preview_lines(
+        &s.binds,
+        s.tap.action.as_deref(),
+    ));
+    s.edit = Edit {
+        mode: Some(Mode::Apply),
+        apply_lines: lines,
+        ..Edit::default()
+    };
+}
+
+/// Send the buffer to the apply helper and report what it said.
+fn apply_now(s: &mut State) {
+    let how = s.privilege.clone();
+    match crate::keyd::privilege::apply_text(&how, &s.text) {
+        Ok(outcome) if outcome.status.success() => {
+            s.edit.close();
+            s.dirty = false;
+            s.status = "Applied.".to_string();
+        }
+        Ok(outcome) => {
+            s.edit.error = if outcome.message.is_empty() {
+                format!("apply failed: {}", outcome.status)
+            } else {
+                outcome.message
+            };
+        }
+        Err(error) => {
+            s.edit.error = format!("could not run the apply helper: {error}");
+        }
+    }
+}
+
 /// Open the tap-action chooser.
 pub fn open_tap(s: &mut State) {
     s.edit = Edit {
@@ -499,6 +545,32 @@ pub fn on_key(s: &mut State, ev: &KeyEvent) -> bool {
             }
             _ => false,
         },
+        Mode::Monitor => match &ev.key {
+            Key::Escape => {
+                // Dropping the stream closes the helper's stdin, which is how a root process
+                // is stopped.
+                s.monitor_stream = None;
+                s.monitor_status = "stopped".to_string();
+                s.edit.close();
+                true
+            }
+            Key::Text(typed) if typed == "c" => {
+                s.monitor = crate::keyd::monitor::MonitorLog::default();
+                true
+            }
+            _ => false,
+        },
+        Mode::Apply => match &ev.key {
+            Key::Enter => {
+                apply_now(s);
+                true
+            }
+            Key::Escape => {
+                s.edit.close();
+                true
+            }
+            _ => false,
+        },
         Mode::Normal => false,
     }
 }
@@ -611,6 +683,7 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
         Mode::Tap => "Short Caps press".to_string(),
         Mode::Packs => "Preset packs".to_string(),
         Mode::Backups => "Backups".to_string(),
+        Mode::Monitor => "Live keyd output".to_string(),
         Mode::Normal => String::new(),
     };
     body = body.child(text(title).font(type_::TITLE).color(t.text));
@@ -827,6 +900,26 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
                     }
                 }
             }
+        }
+        Mode::Monitor => {
+            body = body.child(
+                text(s.monitor_status.clone())
+                    .key("monitor-status")
+                    .font(type_::LABEL)
+                    .color(t.text_secondary),
+            );
+            let rows = s.monitor.rows();
+            for (index, row_text) in rows.iter().rev().take(14).rev().enumerate() {
+                body = body.child(
+                    text(row_text.clone())
+                        .key(format!("monitor-{index}"))
+                        .font(type_::SECTION)
+                        .color(t.text),
+                );
+            }
+            body = body.child(
+                text("c clears · Esc stops").font(type_::SECTION).color(t.text_secondary),
+            );
         }
         Mode::Normal => {}
     }
