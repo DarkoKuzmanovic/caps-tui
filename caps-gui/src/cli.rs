@@ -54,16 +54,34 @@ fn default_conf() -> PathBuf {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(PathBuf::from));
-    default_conf_from(exe_dir.as_deref(), config_dir().as_deref())
+    default_conf_from(
+        exe_dir.as_deref(),
+        Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))),
+        config_dir().as_deref(),
+    )
 }
 
 /// `default_conf`, from explicit directories — the form tests use. No environment involved.
-pub fn default_conf_from(exe_dir: Option<&std::path::Path>, config: Option<&std::path::Path>) -> PathBuf {
+///
+/// `build_checkout` is the crate directory the binary was compiled from: an installed binary
+/// still finds the checkout's config, which is what a `.desktop` launch needs when nothing is
+/// set and no config has been copied to `$XDG_CONFIG_HOME` yet.
+pub fn default_conf_from(
+    exe_dir: Option<&std::path::Path>,
+    build_checkout: Option<&std::path::Path>,
+    config: Option<&std::path::Path>,
+) -> PathBuf {
     if let Some(dir) = exe_dir {
         for candidate in [dir.join("default.conf"), dir.join("../../default.conf")] {
             if candidate.is_file() {
                 return std::fs::canonicalize(&candidate).unwrap_or(candidate);
             }
+        }
+    }
+    if let Some(checkout) = build_checkout {
+        let candidate = checkout.join("../default.conf");
+        if candidate.is_file() {
+            return std::fs::canonicalize(&candidate).unwrap_or(candidate);
         }
     }
     if let Some(config) = config {

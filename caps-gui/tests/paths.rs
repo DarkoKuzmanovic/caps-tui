@@ -12,7 +12,7 @@ fn a_config_beside_the_binary_wins() {
     let beside = dir.path().join("default.conf");
     std::fs::write(&beside, "[nav]\n").expect("write");
     assert_eq!(
-        default_conf_from(Some(dir.path()), None),
+        default_conf_from(Some(dir.path()), None, None),
         std::fs::canonicalize(&beside).expect("canonical")
     );
 }
@@ -26,7 +26,20 @@ fn a_checkout_two_levels_up_is_found() {
     let exe_dir = dir.path().join("target/debug");
     std::fs::create_dir_all(&exe_dir).expect("dirs");
     assert_eq!(
-        default_conf_from(Some(&exe_dir), None),
+        default_conf_from(Some(&exe_dir), None, None),
+        std::fs::canonicalize(&checkout).expect("canonical")
+    );
+}
+
+#[test]
+fn the_checkout_the_binary_was_built_from_is_found() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let checkout = dir.path().join("default.conf");
+    std::fs::write(&checkout, "[nav]\n").expect("write");
+    let crate_dir = dir.path().join("caps-gui");
+    std::fs::create_dir_all(&crate_dir).expect("dirs");
+    assert_eq!(
+        default_conf_from(None, Some(&crate_dir), None),
         std::fs::canonicalize(&checkout).expect("canonical")
     );
 }
@@ -36,14 +49,14 @@ fn the_config_directory_is_the_fallback() {
     let dir = tempfile::tempdir().expect("temp dir");
     let config = dir.path().join("caps-gui");
     assert_eq!(
-        default_conf_from(None, Some(&config)),
+        default_conf_from(None, None, Some(&config)),
         config.join("default.conf")
     );
 }
 
 #[test]
 fn with_nothing_available_the_working_directory_is_last() {
-    assert_eq!(default_conf_from(None, None), std::path::PathBuf::from("default.conf"));
+    assert_eq!(default_conf_from(None, None, None), std::path::PathBuf::from("default.conf"));
     assert_eq!(default_install_from(None), std::path::PathBuf::from("install.sh"));
 }
 

@@ -16,7 +16,7 @@ ui = ["dep:rune"]
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 regex = "1"
-rune = { git = "https://github.com/anomalyco/rune", rev = "cca5df6fafb4721d96fe105f126ebfd2ec351bb6", optional = true }
+rune = { git = "https://github.com/anomalyco/rune", rev = "cca5df6fafb4721d96fe105f126ebfd2ec351bb6", features = ["tooling"], optional = true }
 similar = "2"
 tempfile = "3"
 thiserror = "2"
