@@ -15,25 +15,33 @@ p = sysrq
 volumedown = C-minus
 ";
 
-fn state() -> State {
+fn state_with(conf: &str) -> State {
     let dir = tempfile::tempdir().expect("temp dir");
-    let conf = dir.path().join("default.conf");
-    std::fs::write(&conf, CONF).expect("write");
+    let conf_path = dir.path().join("default.conf");
+    std::fs::write(&conf_path, conf).expect("write");
     // The temp dir must outlive the test body; leaking it is fine for a test process.
     std::mem::forget(dir);
     State::load(Paths {
-        conf: conf.clone(),
-        install: conf.with_file_name("install.sh"),
-        etc: conf.with_file_name("etc"),
+        conf: conf_path.clone(),
+        install: conf_path.with_file_name("install.sh"),
+        etc: conf_path.with_file_name("etc"),
     })
     .expect("load")
 }
 
-fn runtime() -> Runtime<State> {
-    let mut rt = Runtime::new(state(), view, (900.0, 560.0), Env::new(true, 1.0));
+fn state() -> State {
+    state_with(CONF)
+}
+
+fn runtime_with(conf: &str) -> Runtime<State> {
+    let mut rt = Runtime::new(state_with(conf), view, (980.0, 760.0), Env::new(true, 1.0));
     rt.on_key = Some(on_key);
     rt.frame(0.0);
     rt
+}
+
+fn runtime() -> Runtime<State> {
+    runtime_with(CONF)
 }
 
 fn press(rt: &mut Runtime<State>, key: Key) {
@@ -136,4 +144,38 @@ fn a_filter_matching_nothing_shows_no_rows() {
 fn the_tap_is_read_from_the_config() {
     let rt = runtime();
     assert_eq!(rt.state.tap.action.as_deref(), Some("capslock"));
+}
+
+#[test]
+fn the_map_draws_every_cap() {
+    let rt = runtime();
+    let keys: Vec<String> = rt
+        .elements()
+        .iter()
+        .filter_map(|element| element.key.clone())
+        .collect();
+    for cap in ["cap-capslock", "cap-j", "cap-space", "cap-mute", "cap-up", "cap-f24"] {
+        assert!(keys.contains(&cap.to_string()), "{cap} missing");
+    }
+}
+
+#[test]
+fn clicking_a_bound_cap_selects_its_row() {
+    let conf = CONF.replace("p = sysrq", "p = sysrq\nj = down");
+    let mut rt = runtime_with(&conf);
+    let (x, y) = rt.find("cap-j").expect("cap-j");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.current().map(|binding| binding.key.as_str()), Some("j"));
+}
+
+#[test]
+fn clicking_an_unbound_cap_says_so() {
+    let mut rt = runtime();
+    let (x, y) = rt.find("cap-z").expect("cap-z");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.status, "z has no binding yet.");
 }

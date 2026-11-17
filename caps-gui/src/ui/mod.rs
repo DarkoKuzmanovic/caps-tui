@@ -11,6 +11,32 @@ use crate::keyd::config::{Binding, Tap, parse, read_tap, tap_label};
 use crate::keyd::data::action_description;
 use crate::keyd::rules::filter_binding_indices;
 
+pub mod map;
+
+/// Select the binding for `key`, clearing the filter when it hides the row.
+pub fn select_key(s: &mut State, key: &str) {
+    let visible = s.visible();
+    if let Some(position) = visible
+        .iter()
+        .position(|&index| s.binds[index].key.eq_ignore_ascii_case(key))
+    {
+        s.selected = position;
+        s.status.clear();
+        return;
+    }
+    if s.binds.iter().any(|binding| binding.key.eq_ignore_ascii_case(key)) {
+        s.filter.clear();
+        s.selected = s
+            .visible()
+            .iter()
+            .position(|&index| s.binds[index].key.eq_ignore_ascii_case(key))
+            .unwrap_or(0);
+        s.status.clear();
+    } else {
+        s.status = format!("{key} has no binding yet.");
+    }
+}
+
 /// Everything the window draws and the key handler edits.
 pub struct State {
     pub paths: Paths,
@@ -176,6 +202,8 @@ pub fn view(s: &State, _: &mut Cx<State>) -> El {
         .fill(t.bg)
         .child(header)
         .child(el().h(1.0).w_full().fill(t.separator))
+        .child(map::map(s, &t))
+        .child(el().h(1.0).w_full().fill(t.separator))
         .child(list.scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0))
         .child(text(footer).font(type_::SECTION).color(t.text_secondary))
         .child(text(s.status.clone()).font(type_::SECTION).color(t.text_secondary))
@@ -255,6 +283,6 @@ pub fn run() {
         scenes: &[],
         setup: Some(setup),
         on_key: Some(on_key),
-        ..AppSpec::new("caps-gui", (900.0, 560.0), State::default, view)
+        ..AppSpec::new("caps-gui", (980.0, 760.0), State::default, view)
     });
 }
