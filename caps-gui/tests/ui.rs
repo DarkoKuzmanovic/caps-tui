@@ -31,10 +31,6 @@ fn state_with(conf: &str) -> State {
     .expect("load")
 }
 
-fn state() -> State {
-    state_with(CONF)
-}
-
 fn runtime_with(conf: &str) -> Runtime<State> {
     let mut rt = Runtime::new(state_with(conf), view, (980.0, 760.0), Env::new(true, 1.0));
     rt.on_key = Some(on_key);
@@ -298,6 +294,169 @@ fn d_removes_the_selected_binding_and_u_restores_it() {
     assert!(rt.state.text.contains("left = home"));
     typ(&mut rt, "U");
     assert_eq!(rt.state.binds.len(), 3);
+}
+
+#[test]
+fn a_keyd_rejection_keeps_the_overlay_open() {
+    let mut rt = runtime();
+    rt.state.checker = |_: &str| {
+        Ok(caps_gui::keyd::system::CheckOutcome::Rejected(
+            "invalid key or action".into(),
+        ))
+    };
+    press(&mut rt, Key::Enter);
+    for c in ["z", "o", "o", "m"] {
+        typ(&mut rt, c);
+    }
+    press(&mut rt, Key::Enter);
+    // The picker stays open, the binding is untouched, and the reason is shown.
+    assert_eq!(rt.state.edit.mode, Some(Mode::Picker));
+    assert!(rt.state.edit.error.contains("invalid key or action"), "{}", rt.state.edit.error);
+    assert_eq!(rt.state.binds[0].action, "home");
+    assert!(!rt.state.dirty);
+}
+
+#[test]
+fn t_sets_the_tap_action() {
+    let mut rt = runtime();
+    typ(&mut rt, "t");
+    assert_eq!(rt.state.edit.mode, Some(Mode::Tap));
+    press(&mut rt, Key::Down);
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.mode, None);
+    assert_eq!(rt.state.tap.action.as_deref(), Some("esc"));
+    assert!(rt.state.text.contains("capslock = overload(nav, esc)"));
+    assert!(rt.state.dirty);
+}
+
+#[test]
+fn p_merges_a_preset_pack() {
+    let mut rt = runtime();
+    typ(&mut rt, "p");
+    assert_eq!(rt.state.edit.mode, Some(Mode::Packs));
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.mode, None);
+    // "Vim arrows" is first: h/j/k/l and u/o.
+    assert!(rt.state.text.contains("h = left"));
+    assert!(rt.state.text.contains("o = pagedown"));
+    assert!(rt.state.status.contains("Pack: Vim arrows"));
+}
+
+#[test]
+fn b_loads_nav_from_a_backup() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let conf = dir.path().join("default.conf");
+    std::fs::write(&conf, CONF).expect("write");
+    let etc = dir.path().join("etc");
+    std::fs::create_dir_all(&etc).expect("etc");
+    std::fs::write(etc.join("default.conf"), CONF).expect("live");
+    std::fs::write(
+        etc.join("default.conf.bak.2026-11-17-153149"),
+        "[main]\ncapslock = overload(nav, capslock)\n\n[nav]\nq = esc\n",
+    )
+    .expect("backup");
+
+    let state = State::load(Paths {
+        conf: conf.clone(),
+        install: conf.with_file_name("install.sh"),
+        etc: etc.clone(),
+    })
+    .expect("load");
+    let mut rt = Runtime::new(state, view, (980.0, 760.0), Env::new(true, 1.0));
+    rt.on_key = Some(on_key);
+    rt.frame(0.0);
+
+    typ(&mut rt, "b");
+    assert_eq!(rt.state.edit.mode, Some(Mode::Backups));
+    assert_eq!(rt.state.edit.backups.len(), 1);
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.mode, None);
+    assert_eq!(rt.state.binds.len(), 1);
+    assert_eq!(rt.state.binds[0].key, "q");
+    assert!(rt.state.text.contains("q = esc"));
+    assert!(!rt.state.text.contains("left = home"));
+    assert!(rt.state.dirty);
+}
+
+#[test]
+fn undo_after_a_tap_change_restores_the_tap() {
+    let mut rt = runtime();
+    typ(&mut rt, "t");
+    press(&mut rt, Key::Down);
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.tap.action.as_deref(), Some("esc"));
+    typ(&mut rt, "u");
+    assert_eq!(rt.state.tap.action.as_deref(), Some("capslock"));
+    assert!(rt.state.text.contains("capslock = overload(nav, capslock)"));
+}
+
+#[test]
+fn the_pack_panel_previews_before_merging() {
+    let mut rt = runtime();
+    typ(&mut rt, "p");
+    // "Knob: tabs" is the sixth pack.
+    for _ in 0..5 {
+        press(&mut rt, Key::Down);
+    }
+    rt.frame(1.0 / 60.0);
+    let texts: Vec<String> = rt
+        .elements()
+        .iter()
+        .filter_map(|element| element.text.clone())
+        .collect();
+    assert!(rt.find("preview-0").is_some(), "no preview block");
+    let preview: Vec<String> = rt
+        .elements()
+        .iter()
+        .filter(|element| element.key.as_deref().is_some_and(|key| key.starts_with("preview-")))
+        .filter_map(|element| element.text.clone())
+        .collect();
+    assert!(preview.iter().any(|text| text.contains("Pack: Knob: tabs")), "{preview:?}");
+    assert!(preview.iter().any(|text| text.contains("volumedown: C-minus → C-S-tab")), "{preview:?}");
+    // Nothing merged yet.
+    assert!(!rt.state.text.contains("C-S-tab"));
+}
+
+#[test]
+fn the_backup_panel_previews_before_loading() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let conf = dir.path().join("default.conf");
+    std::fs::write(&conf, CONF).expect("write");
+    let etc = dir.path().join("etc");
+    std::fs::create_dir_all(&etc).expect("etc");
+    std::fs::write(etc.join("default.conf"), CONF).expect("live");
+    std::fs::write(
+        etc.join("default.conf.bak.2026-11-17-153149"),
+        "[main]\ncapslock = overload(nav, capslock)\n\n[nav]\nleft = end\n",
+    )
+    .expect("backup");
+
+    let state = State::load(Paths {
+        conf: conf.clone(),
+        install: conf.with_file_name("install.sh"),
+        etc: etc.clone(),
+    })
+    .expect("load");
+    let mut rt = Runtime::new(state, view, (980.0, 760.0), Env::new(true, 1.0));
+    rt.on_key = Some(on_key);
+    rt.frame(0.0);
+    typ(&mut rt, "b");
+    rt.frame(1.0 / 60.0);
+
+    let texts: Vec<String> = rt
+        .elements()
+        .iter()
+        .filter_map(|element| element.text.clone())
+        .collect();
+    let preview: Vec<String> = rt
+        .elements()
+        .iter()
+        .filter(|element| element.key.as_deref().is_some_and(|key| key.starts_with("preview-")))
+        .filter_map(|element| element.text.clone())
+        .collect();
+    assert!(preview.iter().any(|text| text.contains("-left = home")), "{preview:?}");
+    assert!(preview.iter().any(|text| text.contains("+left = end")), "{preview:?}");
+    assert!(rt.state.text.contains("left = home"), "nothing loaded yet");
 }
 
 #[test]

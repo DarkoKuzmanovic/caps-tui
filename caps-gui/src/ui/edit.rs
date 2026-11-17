@@ -7,10 +7,11 @@ use rune::tok::{self, radius, type_};
 use rune::{El, Key, KeyEvent, col, el, row, text};
 
 use super::State;
-use crate::keyd::config::{Binding, render};
-use crate::keyd::data::{CATALOG, CUSTOM, action_description};
+use crate::keyd::config::{Binding, parse, render};
+use crate::keyd::data::{CATALOG, CUSTOM, PACKS, action_description};
 use crate::keyd::macros::{MacroStep, build_macro, parse_macro};
 use crate::keyd::rules::{filter_actions, upsert_binding};
+use crate::keyd::system::CheckOutcome;
 
 /// What the overlay is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +20,26 @@ pub enum Mode {
     Picker,
     Custom,
     Macro,
+    Tap,
+    Packs,
+    Backups,
 }
+
+/// Where a typed or chosen action lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Target {
+    #[default]
+    Binding,
+    Tap,
+}
+
+/// The tap actions the editor offers; the last row opens the custom field.
+pub const TAP_CHOICES: [(&str, &str); 4] = [
+    ("capslock", "Caps Lock"),
+    ("esc", "Esc"),
+    ("backspace", "Backspace"),
+    (CUSTOM, "Custom…"),
+];
 
 /// A macro being composed.
 #[derive(Debug, Default, Clone)]
@@ -44,11 +64,16 @@ pub struct Edit {
     pub mode: Option<Mode>,
     /// The key the chosen action will be bound to.
     pub key: String,
+    pub target: Target,
     pub query: String,
     pub picker: usize,
     pub custom: String,
     pub draft: MacroDraft,
     pub error: String,
+    pub tap_choice: usize,
+    pub pack: usize,
+    pub backup: usize,
+    pub backups: Vec<crate::keyd::system::BackupEntry>,
 }
 
 impl Edit {
@@ -72,17 +97,32 @@ fn snapshot(s: &State) -> Snapshot {
     Snapshot { binds: s.binds.clone(), tap: s.tap.action.clone() }
 }
 
-/// Replace or add a binding, re-render, and record it for undo.
+/// Replace or add a binding, re-render, validate with keyd, and record it for undo. A rejection
+/// keeps the overlay open with the reason.
 pub fn apply_binding(s: &mut State, key: &str, action: &str) {
     let index = s.binds.iter().position(|binding| binding.key.eq_ignore_ascii_case(key));
     let before = snapshot(s);
     let binds = upsert_binding(&s.binds, key, action, index);
-    s.text = render(&s.text, &binds);
+    let candidate = render(&s.text, &binds);
+    if let Err(reason) = validate(s, &candidate) {
+        s.edit.error = reason;
+        return;
+    }
+    s.text = candidate;
     s.binds = binds;
     s.history.record(&before, &snapshot(s), &format!("{key} → {action}"));
     s.dirty = true;
     s.edit.close();
     s.status = format!("{key} → {action}");
+}
+
+/// Ask keyd about a candidate config; `Err` carries the message to show.
+fn validate(s: &State, candidate: &str) -> Result<(), String> {
+    match (s.checker)(candidate) {
+        Ok(CheckOutcome::Accepted) | Ok(CheckOutcome::KeydMissing) => Ok(()),
+        Ok(CheckOutcome::Rejected(message)) => Err(format!("keyd rejects this: {message}")),
+        Err(error) => Err(format!("could not run keyd check: {error}")),
+    }
 }
 
 /// Remove a binding, re-render, and record it for undo.
@@ -126,8 +166,16 @@ pub fn redo(s: &mut State) {
 }
 
 fn restore(s: &mut State, snapshot: Snapshot) {
-    s.text = render(&s.text, &snapshot.binds);
+    let mut text = render(&s.text, &snapshot.binds);
+    // The tap lives in [main], so it needs its own write; an uneditable [main] keeps the text.
+    if let Some(tap) = &snapshot.tap
+        && let Ok(updated) = crate::keyd::config::write_tap(&text, tap)
+    {
+        text = updated;
+    }
+    s.text = text;
     s.binds = snapshot.binds;
+    s.tap = crate::keyd::config::read_tap(&s.text);
     s.dirty = true;
 }
 
@@ -178,8 +226,108 @@ fn commit_custom(s: &mut State) {
         s.edit.error = "An action must be a non-empty single line.".into();
         return;
     }
-    let key = s.edit.key.clone();
-    apply_binding(s, &key, &action);
+    match s.edit.target {
+        Target::Binding => {
+            let key = s.edit.key.clone();
+            apply_binding(s, &key, &action);
+        }
+        Target::Tap => commit_tap(s, &action),
+    }
+}
+
+/// Set the `[main]` tap action.
+fn commit_tap(s: &mut State, action: &str) {
+    let candidate = match crate::keyd::config::write_tap(&s.text, action) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            s.edit.error = error.to_string();
+            return;
+        }
+    };
+    if let Err(reason) = validate(s, &candidate) {
+        s.edit.error = reason;
+        return;
+    }
+    let before = snapshot(s);
+    s.text = candidate;
+    s.tap = crate::keyd::config::read_tap(&s.text);
+    s.history.record(&before, &snapshot(s), &format!("tap {action}"));
+    s.dirty = true;
+    s.edit.close();
+    s.status = format!("Tap: {}", crate::keyd::config::tap_label(&s.tap));
+}
+
+/// Merge a preset pack into `[nav]`.
+fn commit_pack(s: &mut State, pack: &crate::keyd::data::Pack) {
+    let merge = crate::keyd::rules::merge_pack(&s.binds, pack);
+    let candidate = render(&s.text, &merge.merged);
+    if let Err(reason) = validate(s, &candidate) {
+        s.edit.error = reason;
+        return;
+    }
+    let before = snapshot(s);
+    let summary = crate::keyd::rules::pack_summary(pack, &merge, s.tap.action.as_deref()).join(" · ");
+    s.text = candidate;
+    s.binds = merge.merged;
+    s.history.record(&before, &snapshot(s), &format!("pack {}", pack.name));
+    s.dirty = true;
+    s.edit.close();
+    s.status = summary;
+}
+
+/// Load `[nav]` bindings from a timestamped backup, leaving every other section alone.
+fn commit_backup(s: &mut State, path: &std::path::Path) {
+    let backup = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) => {
+            s.edit.error = format!("cannot read {}: {error}", path.display());
+            return;
+        }
+    };
+    let (lines, outside) = crate::keyd::config::backup_preview(&s.text, &backup);
+    let binds = parse(&backup);
+    let candidate = render(&s.text, &binds);
+    if let Err(reason) = validate(s, &candidate) {
+        s.edit.error = reason;
+        return;
+    }
+    let before = snapshot(s);
+    s.text = candidate;
+    s.binds = binds;
+    s.history.record(&before, &snapshot(s), "load backup");
+    s.dirty = true;
+    s.edit.close();
+    s.status = lines
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "Loaded [nav] from the backup.".to_string());
+    if outside {
+        s.status = format!("{} (other sections differ; [nav] only)", s.status);
+    }
+}
+
+/// Open the tap-action chooser.
+pub fn open_tap(s: &mut State) {
+    s.edit = Edit {
+        mode: Some(Mode::Tap),
+        target: Target::Tap,
+        ..Edit::default()
+    };
+}
+
+/// Open the preset pack list.
+pub fn open_packs(s: &mut State) {
+    s.edit = Edit { mode: Some(Mode::Packs), ..Edit::default() };
+}
+
+/// Open the backup list for the live keyd directory.
+pub fn open_backups(s: &mut State) {
+    let backups = crate::keyd::system::backup_entries(Some(&s.paths.etc));
+    s.edit = Edit {
+        mode: Some(Mode::Backups),
+        backups,
+        ..Edit::default()
+    };
 }
 
 fn commit_macro(s: &mut State) {
@@ -283,6 +431,74 @@ pub fn on_key(s: &mut State, ev: &KeyEvent) -> bool {
             _ => false,
         },
         Mode::Macro => macro_keys(s, ev),
+        Mode::Tap => match &ev.key {
+            Key::Up => {
+                s.edit.tap_choice = s.edit.tap_choice.saturating_sub(1);
+                true
+            }
+            Key::Down => {
+                s.edit.tap_choice = (s.edit.tap_choice + 1).min(TAP_CHOICES.len() - 1);
+                true
+            }
+            Key::Enter => {
+                let (action, _) = TAP_CHOICES[s.edit.tap_choice.min(TAP_CHOICES.len() - 1)];
+                if action == CUSTOM {
+                    s.edit.mode = Some(Mode::Custom);
+                    s.edit.custom.clear();
+                } else {
+                    commit_tap(s, action);
+                }
+                true
+            }
+            Key::Escape => {
+                s.edit.close();
+                true
+            }
+            _ => false,
+        },
+        Mode::Packs => match &ev.key {
+            Key::Up => {
+                s.edit.pack = s.edit.pack.saturating_sub(1);
+                true
+            }
+            Key::Down => {
+                s.edit.pack = (s.edit.pack + 1).min(PACKS.len() - 1);
+                true
+            }
+            Key::Enter => {
+                let pack = &PACKS[s.edit.pack.min(PACKS.len() - 1)];
+                commit_pack(s, pack);
+                true
+            }
+            Key::Escape => {
+                s.edit.close();
+                true
+            }
+            _ => false,
+        },
+        Mode::Backups => match &ev.key {
+            Key::Up => {
+                s.edit.backup = s.edit.backup.saturating_sub(1);
+                true
+            }
+            Key::Down => {
+                let last = s.edit.backups.len().saturating_sub(1);
+                s.edit.backup = (s.edit.backup + 1).min(last);
+                true
+            }
+            Key::Enter => {
+                if let Some(entry) = s.edit.backups.get(s.edit.backup) {
+                    let path = entry.path.clone();
+                    commit_backup(s, &path);
+                }
+                true
+            }
+            Key::Escape => {
+                s.edit.close();
+                true
+            }
+            _ => false,
+        },
         Mode::Normal => false,
     }
 }
@@ -392,6 +608,9 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
         Mode::Picker => format!("Action for {}", s.edit.key),
         Mode::Custom => format!("Custom action for {}", s.edit.key),
         Mode::Macro => format!("Macro for {}", s.edit.key),
+        Mode::Tap => "Short Caps press".to_string(),
+        Mode::Packs => "Preset packs".to_string(),
+        Mode::Backups => "Backups".to_string(),
         Mode::Normal => String::new(),
     };
     body = body.child(text(title).font(type_::TITLE).color(t.text));
@@ -491,6 +710,122 @@ pub fn panel(s: &State, t: &tok::Theme) -> El {
                         .font(type_::SECTION)
                         .color(t.text_secondary),
                 );
+            }
+        }
+        Mode::Tap => {
+            for (index, (action, label)) in TAP_CHOICES.iter().enumerate() {
+                let selected = index == s.edit.tap_choice;
+                let fill = if selected { tok::accent(0, true) } else { t.bg };
+                let ink = if selected { t.bg } else { t.text };
+                body = body.child(
+                    row()
+                        .key(format!("tap-{index}"))
+                        .h(26.0)
+                        .px(8.0)
+                        .gap(10.0)
+                        .center_y()
+                        .radius(radius::SM)
+                        .fill(fill)
+                        .child(text((*label).to_string()).font(type_::BODY).w(160.0).color(ink))
+                        .child(text((*action).to_string()).font(type_::SECTION).grow(1.0).color(ink)),
+                );
+            }
+            body = body.child(
+                text("Enter chooses · Esc cancels").font(type_::SECTION).color(t.text_secondary),
+            );
+        }
+        Mode::Packs => {
+            for (index, pack) in crate::keyd::data::PACKS.iter().enumerate() {
+                let selected = index == s.edit.pack;
+                let fill = if selected { tok::accent(0, true) } else { t.bg };
+                let ink = if selected { t.bg } else { t.text };
+                body = body.child(
+                    row()
+                        .key(format!("pack-{index}"))
+                        .h(26.0)
+                        .px(8.0)
+                        .gap(10.0)
+                        .center_y()
+                        .radius(radius::SM)
+                        .fill(fill)
+                        .child(text(pack.name.to_string()).font(type_::BODY).w(180.0).color(ink))
+                        .child(text(pack.description.to_string()).font(type_::SECTION).grow(1.0).color(ink)),
+                );
+            }
+            body = body.child(
+                text("Enter merges the pack · Esc cancels").font(type_::SECTION).color(t.text_secondary),
+            );
+            if let Some(pack) = PACKS.get(s.edit.pack) {
+                let merge = crate::keyd::rules::merge_pack(&s.binds, pack);
+                for (index, line) in crate::keyd::rules::pack_summary(pack, &merge, s.tap.action.as_deref())
+                    .iter()
+                    .enumerate()
+                {
+                    body = body.child(
+                        text(line.clone())
+                            .key(format!("preview-{index}"))
+                            .font(type_::SECTION)
+                            .color(t.text_secondary),
+                    );
+                }
+            }
+        }
+        Mode::Backups => {
+            if s.edit.backups.is_empty() {
+                body = body.child(
+                    text(format!("No timestamped backups in {}", s.paths.etc.display()))
+                        .font(type_::SECTION)
+                        .color(t.text_secondary),
+                );
+            }
+            for (index, entry) in s.edit.backups.iter().enumerate() {
+                let selected = index == s.edit.backup;
+                let fill = if selected { tok::accent(0, true) } else { t.bg };
+                let ink = if selected { t.bg } else { t.text };
+                let stamp = entry.stamp.clone().unwrap_or_else(|| "?".into());
+                let count = entry
+                    .bindings
+                    .map(|n| format!("{n} bindings"))
+                    .unwrap_or_else(|| "unreadable".into());
+                body = body.child(
+                    row()
+                        .key(format!("backup-{index}"))
+                        .h(26.0)
+                        .px(8.0)
+                        .gap(10.0)
+                        .center_y()
+                        .radius(radius::SM)
+                        .fill(fill)
+                        .child(text(stamp).font(type_::BODY).w(180.0).color(ink))
+                        .child(text(count).font(type_::SECTION).grow(1.0).color(ink)),
+                );
+            }
+            body = body.child(
+                text("Enter loads [nav] from the backup · Esc cancels")
+                    .font(type_::SECTION)
+                    .color(t.text_secondary),
+            );
+            if let Some(entry) = s.edit.backups.get(s.edit.backup) {
+                match std::fs::read_to_string(&entry.path) {
+                    Ok(backup) => {
+                        let (lines, _) = crate::keyd::config::backup_preview(&s.text, &backup);
+                        for (index, line) in lines.iter().take(20).enumerate() {
+                            body = body.child(
+                                text(line.clone())
+                                    .key(format!("preview-{index}"))
+                                    .font(type_::SECTION)
+                                    .color(t.text_secondary),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        body = body.child(
+                            text(format!("cannot read {}: {error}", entry.path.display()))
+                                .font(type_::SECTION)
+                                .color(t.text_secondary),
+                        );
+                    }
+                }
             }
         }
         Mode::Normal => {}

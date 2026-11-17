@@ -42,7 +42,7 @@ pub fn select_key(s: &mut State, key: &str) {
 
 /// Validate and write the config.
 pub fn save(s: &mut State) {
-    match check(&s.text) {
+    match (s.checker)(&s.text) {
         Ok(CheckOutcome::Rejected(message)) => s.status = format!("keyd rejects this: {message}"),
         Err(error) => s.status = format!("could not run keyd check: {error}"),
         Ok(_) => match std::fs::write(&s.paths.conf, &s.text) {
@@ -74,6 +74,8 @@ pub struct State {
     pub history: History<edit::Snapshot>,
     /// Whether the buffer differs from the file.
     pub dirty: bool,
+    /// How a candidate config is validated; tests swap in a stub.
+    pub checker: fn(&str) -> std::io::Result<CheckOutcome>,
 }
 
 impl Default for State {
@@ -90,6 +92,7 @@ impl Default for State {
             edit: edit::Edit::default(),
             history: History::new(50),
             dirty: false,
+            checker: check,
         }
     }
 }
@@ -314,6 +317,18 @@ pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
             if let Some(key) = s.current().map(|binding| binding.key.clone()) {
                 edit::remove_binding(s, &key);
             }
+            true
+        }
+        Key::Text(typed) if typed == "t" => {
+            edit::open_tap(s);
+            true
+        }
+        Key::Text(typed) if typed == "p" => {
+            edit::open_packs(s);
+            true
+        }
+        Key::Text(typed) if typed == "b" => {
+            edit::open_backups(s);
             true
         }
         Key::Text(typed) if typed == "s" => {
