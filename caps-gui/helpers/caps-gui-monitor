@@ -1,0 +1,10 @@
+#!/bin/sh
+# caps-gui-monitor: stream keyd's monitor output for the GUI.
+# Root-owned helper, installed to /usr/libexec by `install.sh --install-policy`.
+# Takes no arguments; the absolute path keeps root's PATH out of it.
+set -eu
+if [ "$#" -ne 0 ]; then
+    echo "caps-gui-monitor takes no arguments" >&2
+    exit 2
+fi
+exec /usr/bin/keyd monitor

@@ -1,0 +1,32 @@
+#!/bin/sh
+# caps-gui-apply: install a keyd config that arrives on stdin.
+# Root-owned helper, installed to /usr/libexec by `install.sh --install-policy`.
+#
+# It trusts nothing it cannot see: no repository file is executed, the target path is fixed, and
+# the config is validated before /etc/keyd is touched. `install.sh --reload` remains the
+# developer path; this is the one a window may call.
+set -eu
+if [ "$#" -ne 0 ]; then
+    echo "caps-gui-apply takes no arguments" >&2
+    exit 2
+fi
+
+conf=/etc/keyd/default.conf
+tmp=$(mktemp /run/caps-gui-apply.XXXXXX)
+trap 'rm -f "$tmp"' EXIT
+
+cat > "$tmp"
+
+keyd=/usr/bin/keyd
+if [ ! -x "$keyd" ]; then
+    keyd=$(command -v keyd) || { echo "caps-gui-apply: keyd not found" >&2; exit 1; }
+fi
+"$keyd" check "$tmp"
+
+install -d /etc/keyd
+if [ -e "$conf" ] && ! cmp -s "$tmp" "$conf"; then
+    cp -a "$conf" "$conf.bak.$(date +%F-%H%M%S)"
+fi
+install -m 644 "$tmp" "$conf"
+"$keyd" reload
+logger -t caps-gui-apply "installed $conf ($(wc -l < "$conf") lines)"

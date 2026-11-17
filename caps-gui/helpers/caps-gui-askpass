@@ -1,0 +1,13 @@
+#!/bin/sh
+# caps-gui-askpass: the `sudo -A` password prompt for caps-gui.
+# Root-owned helper, installed to /usr/libexec by `install.sh --install-policy`.
+# Prints the password on stdout, as sudo expects.
+set -eu
+if command -v kdialog >/dev/null 2>&1; then
+    exec kdialog --password "caps-gui needs your password to change the keyd configuration"
+fi
+if command -v zenity >/dev/null 2>&1; then
+    exec zenity --password --title="caps-gui"
+fi
+echo "caps-gui: install kdialog or zenity for the password prompt" >&2
+exit 1

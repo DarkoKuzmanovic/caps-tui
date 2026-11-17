@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>quz.ma</vendor>
+
+  <!-- auth_admin, never auth_admin_keep: a keyd config can carry command(...) actions, which
+       keyd runs as root, so every apply must be seen and approved by a person. -->
+
+  <action id="ma.quz.caps-gui.apply">
+    <description>Install the keyd Caps Lock layer</description>
+    <message>Authentication is required to write the keyd configuration</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/caps-gui-apply</annotate>
+  </action>
+
+  <action id="ma.quz.caps-gui.monitor">
+    <description>Watch keyd's key events</description>
+    <message>Authentication is required to read keyd's key events</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/caps-gui-monitor</annotate>
+  </action>
+</policyconfig>
