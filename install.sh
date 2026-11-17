@@ -16,11 +16,15 @@ if [[ ${1-} == --reload ]]; then
     exit 1
   fi
   install -d "$keyd_dir"
-  if [[ -e "$keyd_dir/default.conf" ]] && ! cmp -s "$here/default.conf" "$keyd_dir/default.conf"; then
+  # Validate a copy first: a bad config must never reach /etc/keyd, even for a moment.
+  tmp=$(mktemp)
+  trap 'rm -f "$tmp"' EXIT
+  cp "$here/default.conf" "$tmp"
+  keyd check "$tmp"
+  if [[ -e "$keyd_dir/default.conf" ]] && ! cmp -s "$tmp" "$keyd_dir/default.conf"; then
     cp -a "$keyd_dir/default.conf" "$keyd_dir/default.conf.bak.$(date +%F-%H%M%S)"
   fi
-  install -m 644 "$here/default.conf" "$keyd_dir/default.conf"
-  keyd check "$keyd_dir/default.conf"
+  install -m 644 "$tmp" "$keyd_dir/default.conf"
   keyd reload
   echo "OK. Reloaded keyd configuration."
   exit 0
@@ -33,11 +37,15 @@ fi
 
 sudo pacman -S --needed --noconfirm keyd
 sudo install -d "$keyd_dir"
-if [[ -e "$keyd_dir/default.conf" ]] && ! cmp -s "$here/default.conf" "$keyd_dir/default.conf"; then
+# Validate a copy first: a bad config must never reach /etc/keyd, even for a moment.
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+cp "$here/default.conf" "$tmp"
+sudo keyd check "$tmp"
+if [[ -e "$keyd_dir/default.conf" ]] && ! sudo cmp -s "$tmp" "$keyd_dir/default.conf"; then
   sudo cp -a "$keyd_dir/default.conf" "$keyd_dir/default.conf.bak.$(date +%F-%H%M%S)"
 fi
-sudo install -m 644 "$here/default.conf" "$keyd_dir/default.conf"
-sudo keyd check "$keyd_dir/default.conf"
+sudo install -m 644 "$tmp" "$keyd_dir/default.conf"
 sudo systemctl enable --now keyd
 sudo systemctl restart keyd   # picks up config if keyd was already running
 systemctl is-active keyd
