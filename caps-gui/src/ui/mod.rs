@@ -9,11 +9,14 @@ use rune::{AppSpec, Cx, El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use crate::cli::Paths;
 use crate::keyd::config::{Binding, Tap, parse, read_tap, tap_label};
 use crate::keyd::data::action_description;
-use crate::keyd::rules::filter_binding_indices;
+use crate::keyd::rules::{History, filter_binding_indices};
+use crate::keyd::system::{CheckOutcome, check};
 
+pub mod edit;
 pub mod map;
 
-/// Select the binding for `key`, clearing the filter when it hides the row.
+/// Select the binding for `key`, clearing the filter when it hides the row; an unbound cap
+/// opens the picker so a click can add a binding.
 pub fn select_key(s: &mut State, key: &str) {
     let visible = s.visible();
     if let Some(position) = visible
@@ -33,7 +36,24 @@ pub fn select_key(s: &mut State, key: &str) {
             .unwrap_or(0);
         s.status.clear();
     } else {
-        s.status = format!("{key} has no binding yet.");
+        edit::open_picker(s, key);
+    }
+}
+
+/// Validate and write the config.
+pub fn save(s: &mut State) {
+    match check(&s.text) {
+        Ok(CheckOutcome::Rejected(message)) => s.status = format!("keyd rejects this: {message}"),
+        Err(error) => s.status = format!("could not run keyd check: {error}"),
+        Ok(_) => match std::fs::write(&s.paths.conf, &s.text) {
+            Ok(()) => {
+                s.dirty = false;
+                s.status = "Saved.".to_string();
+            }
+            Err(error) => {
+                s.status = format!("cannot write {}: {error}", s.paths.conf.display());
+            }
+        },
     }
 }
 
@@ -49,6 +69,11 @@ pub struct State {
     pub filter: String,
     pub filtering: bool,
     pub status: String,
+    /// The open overlay, if any.
+    pub edit: edit::Edit,
+    pub history: History<edit::Snapshot>,
+    /// Whether the buffer differs from the file.
+    pub dirty: bool,
 }
 
 impl Default for State {
@@ -62,6 +87,9 @@ impl Default for State {
             filter: String::new(),
             filtering: false,
             status: String::new(),
+            edit: edit::Edit::default(),
+            history: History::new(50),
+            dirty: false,
         }
     }
 }
@@ -191,9 +219,15 @@ pub fn view(s: &State, _: &mut Cx<State>) -> El {
     let footer = if s.filtering {
         format!("/{}", s.filter)
     } else if s.filter.is_empty() {
-        "↑↓ move · / filter · q quit".to_string()
+        "↑↓ move · / filter · Enter edit · d delete · s save · u/U undo/redo · q quit".to_string()
     } else {
-        format!("filter {:?} · Esc clears · ↑↓ move · q quit", s.filter)
+        format!("filter {:?} · Esc clears · Enter edit · s save", s.filter)
+    };
+
+    let body = if s.edit.is_open() {
+        edit::panel(s, &t)
+    } else {
+        list.scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0)
     };
 
     col()
@@ -206,13 +240,16 @@ pub fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(el().h(1.0).w_full().fill(t.separator))
         .child(map::map(s, &t))
         .child(el().h(1.0).w_full().fill(t.separator))
-        .child(list.scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0))
+        .child(body)
         .child(text(footer).font(type_::SECTION).color(t.text_secondary))
         .child(text(s.status.clone()).font(type_::SECTION).color(t.text_secondary))
 }
 
-/// Keys: arrows and j/k move, `/` filters, Esc clears, q quits.
+/// Keys: arrows and j/k move, `/` filters, Enter edits, d deletes, s saves, u/U undo/redo, q quits.
 pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    if s.edit.is_open() {
+        return edit::on_key(s, ev);
+    }
     if s.filtering {
         match &ev.key {
             Key::Text(typed) => {
@@ -261,6 +298,36 @@ pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
             s.selected = 0;
             true
         }
+        Key::Enter => {
+            if let Some(key) = s.current().map(|binding| binding.key.clone()) {
+                edit::open_picker(s, &key);
+            }
+            true
+        }
+        Key::Text(typed) if typed == "e" => {
+            if let Some(key) = s.current().map(|binding| binding.key.clone()) {
+                edit::open_picker(s, &key);
+            }
+            true
+        }
+        Key::Text(typed) if typed == "d" => {
+            if let Some(key) = s.current().map(|binding| binding.key.clone()) {
+                edit::remove_binding(s, &key);
+            }
+            true
+        }
+        Key::Text(typed) if typed == "s" => {
+            save(s);
+            true
+        }
+        Key::Text(typed) if typed == "u" => {
+            edit::undo(s);
+            true
+        }
+        Key::Text(typed) if typed == "U" => {
+            edit::redo(s);
+            true
+        }
         Key::Escape => {
             s.filter.clear();
             s.selected = 0;
@@ -282,7 +349,18 @@ pub fn run() {
         state
     });
     rune::App::new(AppSpec::<State> {
-        scenes: &[],
+        scenes: &[
+            ("picker", |s: &mut State| edit::open_picker(s, "left")),
+            ("macro", |s: &mut State| {
+                edit::open_picker(s, "left");
+                s.edit.mode = Some(edit::Mode::Macro);
+                s.edit.draft.steps = vec![
+                    crate::keyd::macros::MacroStep::Text("hi".into()),
+                    crate::keyd::macros::MacroStep::Delay(50),
+                    crate::keyd::macros::MacroStep::Key("enter".into()),
+                ];
+            }),
+        ],
         on_key: Some(on_key),
         ..AppSpec::new("caps-gui", (980.0, 760.0), State::default, view)
     })

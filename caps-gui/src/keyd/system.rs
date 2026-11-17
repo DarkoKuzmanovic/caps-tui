@@ -355,8 +355,15 @@ impl MonitorStream {
         let (program, args) = command
             .split_first()
             .ok_or_else(|| std::io::Error::other("empty monitor command"))?;
-        let mut child = Command::new(program)
-            .args(args)
+        let mut command = Command::new(program);
+        command.args(args);
+        Self::from_command(command)
+    }
+
+    /// Wrap an already-built command: same pipes, same process group, same bounded stop, so the
+    /// privileged monitor path cannot drift from the unprivileged one.
+    pub fn from_command(mut command: Command) -> std::io::Result<Self> {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

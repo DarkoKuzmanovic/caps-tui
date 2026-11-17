@@ -7,7 +7,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 /// Which root helper to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,14 +138,10 @@ pub fn apply_text(how: &Priv, config: &str) -> std::io::Result<ApplyOutcome> {
     Ok(ApplyOutcome { status: output.status, message: message.trim().to_string() })
 }
 
-/// Start the monitor helper, reading its output. Its stdin stays open: the helper exits when it
-/// closes, which is how the app stops a root process it cannot signal.
-pub fn spawn_monitor(how: &Priv) -> std::io::Result<Child> {
-    command(how, Helper::Monitor)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+/// Start the monitor helper as a stream: same pipes, process group and bounded stop as the
+/// unprivileged path, so the panel behaves identically either way.
+pub fn spawn_monitor(how: &Priv) -> std::io::Result<super::system::MonitorStream> {
+    super::system::MonitorStream::from_command(command(how, Helper::Monitor))
 }
 
 fn which(binary: &str) -> Option<PathBuf> {

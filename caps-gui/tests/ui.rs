@@ -2,6 +2,7 @@
 #![cfg(feature = "ui")]
 
 use caps_gui::cli::Paths;
+use caps_gui::ui::edit::Mode;
 use caps_gui::ui::{State, on_key, view};
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
@@ -178,5 +179,138 @@ fn clicking_an_unbound_cap_says_so() {
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     rt.frame(1.0 / 60.0);
-    assert_eq!(rt.state.status, "z has no binding yet.");
+    assert_eq!(rt.state.edit.key, "z");
+    assert_eq!(rt.state.edit.mode, Some(Mode::Picker));
+}
+
+#[test]
+fn enter_opens_the_picker_for_the_selected_binding() {
+    let mut rt = runtime();
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.mode, Some(Mode::Picker));
+    assert_eq!(rt.state.edit.key, "left");
+}
+
+#[test]
+fn the_picker_filters_and_applies_a_catalog_action() {
+    let mut rt = runtime();
+    press(&mut rt, Key::Enter);
+    for c in ["z", "o", "o", "m"] {
+        typ(&mut rt, c);
+    }
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.mode, None);
+    assert_eq!(rt.state.binds[0].action, "C-minus");
+    assert!(rt.state.text.contains("left = C-minus"));
+    assert!(rt.state.dirty);
+}
+
+#[test]
+fn escape_closes_the_picker_without_changing_anything() {
+    let mut rt = runtime();
+    let before = rt.state.text.clone();
+    press(&mut rt, Key::Enter);
+    typ(&mut rt, "zoom");
+    press(&mut rt, Key::Escape);
+    assert_eq!(rt.state.edit.mode, None);
+    assert_eq!(rt.state.text, before);
+    assert!(!rt.state.dirty);
+}
+
+#[test]
+fn a_custom_action_can_be_typed() {
+    let mut rt = runtime();
+    press(&mut rt, Key::Enter);
+    // A query that matches nothing leaves Custom… first, then Macro builder…
+    for c in ["z", "z", "z"] {
+        typ(&mut rt, c);
+    }
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.mode, Some(Mode::Custom));
+    for c in ["C", "-", "m", "i", "n", "u", "s"] {
+        typ(&mut rt, c);
+    }
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.mode, None);
+    assert_eq!(rt.state.binds[0].action, "C-minus");
+}
+
+#[test]
+fn the_macro_builder_composes_a_macro() {
+    let mut rt = runtime();
+    press(&mut rt, Key::Enter);
+    for c in ["z", "z", "z"] {
+        typ(&mut rt, c);
+    }
+    press(&mut rt, Key::Down);
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.mode, Some(Mode::Macro));
+
+    typ(&mut rt, "t");
+    for c in ["h", "i"] {
+        typ(&mut rt, c);
+    }
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.draft.steps.len(), 1);
+
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.mode, None);
+    assert_eq!(rt.state.binds[0].action, "macro(hi)");
+    assert!(rt.state.text.contains("left = macro(hi)"));
+}
+
+#[test]
+fn a_macro_step_can_be_removed_and_reordered() {
+    let mut rt = runtime();
+    press(&mut rt, Key::Enter);
+    for c in ["z", "z", "z"] {
+        typ(&mut rt, c);
+    }
+    press(&mut rt, Key::Down);
+    press(&mut rt, Key::Enter);
+    // text "a", then key "C-x"
+    typ(&mut rt, "t");
+    typ(&mut rt, "a");
+    press(&mut rt, Key::Enter);
+    typ(&mut rt, "k");
+    for c in ["C", "-", "x"] {
+        typ(&mut rt, c);
+    }
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.edit.draft.steps.len(), 2);
+    typ(&mut rt, "K");
+    assert_eq!(
+        rt.state.edit.draft.steps[0],
+        caps_gui::keyd::macros::MacroStep::Key("C-x".into())
+    );
+    typ(&mut rt, "x");
+    assert_eq!(rt.state.edit.draft.steps.len(), 1);
+}
+
+#[test]
+fn d_removes_the_selected_binding_and_u_restores_it() {
+    let mut rt = runtime();
+    typ(&mut rt, "d");
+    assert_eq!(rt.state.binds.len(), 3);
+    assert!(!rt.state.text.contains("left = home"));
+    typ(&mut rt, "u");
+    assert_eq!(rt.state.binds.len(), 4);
+    assert!(rt.state.text.contains("left = home"));
+    typ(&mut rt, "U");
+    assert_eq!(rt.state.binds.len(), 3);
+}
+
+#[test]
+fn s_saves_the_file() {
+    let mut rt = runtime();
+    press(&mut rt, Key::Enter);
+    for c in ["z", "o", "o", "m"] {
+        typ(&mut rt, c);
+    }
+    press(&mut rt, Key::Enter);
+    assert!(rt.state.dirty);
+    typ(&mut rt, "s");
+    assert!(!rt.state.dirty);
+    let saved = std::fs::read_to_string(&rt.state.paths.conf).expect("read");
+    assert!(saved.contains("left = C-minus"));
 }

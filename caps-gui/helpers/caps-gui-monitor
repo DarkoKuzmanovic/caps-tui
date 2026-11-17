@@ -1,18 +1,31 @@
-#!/bin/sh
+#!/usr/bin/bash
 # caps-gui-monitor: stream keyd's monitor output for the GUI.
 # Root-owned helper, installed to /usr/libexec by `install.sh --install-policy`.
 # Takes no arguments; the absolute path keeps root's PATH out of it.
 #
-# pkexec runs this as root, so the app cannot signal it (kill gets EPERM). The app stops the
-# stream by closing this process's stdin instead: `cat` returns on EOF, the trap kills keyd, and
-# the helper exits.
-set -eu
+# Two ways out, and both matter:
+#  - the app closes this process's stdin (pkexec runs us as root, so it cannot signal us);
+#  - keyd exits on its own (no permission, no devices), which must reach the app as an exit
+#    rather than a panel that waits forever.
+set -euo pipefail
 if [ "$#" -ne 0 ]; then
     echo "caps-gui-monitor takes no arguments" >&2
     exit 2
 fi
 
+# A background command gets /dev/null as stdin when job control is off, so hold the real stdin
+# on fd 3 before forking and hand that to `cat`.
+exec 3<&0
 /usr/bin/keyd monitor &
 monitor=$!
-trap 'kill "$monitor" 2>/dev/null || true' EXIT INT TERM
-cat > /dev/null
+cat <&3 > /dev/null &
+reader=$!
+exec 3<&-
+
+cleanup() {
+    kill "$monitor" "$reader" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# Whichever finishes first ends the stream; the trap stops the other.
+wait -n "$monitor" "$reader" || true
