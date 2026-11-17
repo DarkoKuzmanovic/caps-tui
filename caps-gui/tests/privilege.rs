@@ -108,10 +108,23 @@ fn apply_feeds_the_config_on_stdin() {
         "stub",
         &format!("#!/bin/sh\ncat > '{}'\nexit 0\n", received.display()),
     );
-    let status = apply_text(&Priv::Stub(script), "[nav]\na = b\n").expect("apply");
-    assert!(status.success());
+    let outcome = apply_text(&Priv::Stub(script), "[nav]\na = b\n").expect("apply");
+    assert!(outcome.status.success());
     assert_eq!(
         std::fs::read_to_string(&received).expect("read"),
         "[nav]\na = b\n"
     );
+}
+
+#[test]
+fn a_rejected_apply_brings_the_reason_back() {
+    let dir = temp_dir();
+    let script = stub(
+        dir.path(),
+        "stub",
+        "#!/bin/sh\ncat > /dev/null\necho 'invalid key or action' >&2\nexit 1\n",
+    );
+    let outcome = apply_text(&Priv::Stub(script), "[nav]\nBROKEN = x\n").expect("apply ran");
+    assert!(!outcome.status.success());
+    assert!(outcome.message.contains("invalid key or action"), "{}", outcome.message);
 }

@@ -15,7 +15,7 @@ use crate::keyd::rules::{
     warnings_for_key,
 };
 use crate::keyd::system::{
-    check, keyd_bin, keyd_etc_dir, read_live_config, run_apply,
+    CheckOutcome, check, keyd_bin, keyd_etc_dir, read_live_config, run_apply,
 };
 
 /// Where the CLI reads and writes.
@@ -193,13 +193,16 @@ fn confirm(prompt: &str) -> bool {
 }
 
 fn validate(text: &str) -> Result<(), CliError> {
-    if keyd_bin().is_none() {
-        eprintln!("keyd not installed; config not validated.");
-        return Ok(());
-    }
     match check(text) {
-        Some(error) => Err(CliError::new(format!("keyd rejects the resulting config:\n{error}"))),
-        None => Ok(()),
+        Ok(CheckOutcome::KeydMissing) => {
+            eprintln!("keyd not installed; config not validated.");
+            Ok(())
+        }
+        Ok(CheckOutcome::Accepted) => Ok(()),
+        Ok(CheckOutcome::Rejected(error)) => Err(CliError::new(format!(
+            "keyd rejects the resulting config:\n{error}"
+        ))),
+        Err(error) => Err(CliError::new(format!("could not run keyd check: {error}"))),
     }
 }
 
@@ -429,18 +432,19 @@ fn command(paths: &Paths, command: &Command) -> Result<i32, CliError> {
         }
         Command::Check => {
             let text = load(paths)?;
-            if keyd_bin().is_none() {
-                return Err(CliError::new("keyd not installed; cannot validate."));
-            }
             match check(&text) {
-                Some(error) => {
-                    eprintln!("{error}");
-                    Err(CliError::new(format!("{} is invalid.", paths.conf.display())))
-                }
-                None => {
+                Ok(CheckOutcome::Accepted) => {
                     println!("{}: OK", paths.conf.display());
                     Ok(0)
                 }
+                Ok(CheckOutcome::KeydMissing) => {
+                    Err(CliError::new("keyd not installed; cannot validate."))
+                }
+                Ok(CheckOutcome::Rejected(error)) => {
+                    eprintln!("{error}");
+                    Err(CliError::new(format!("{} is invalid.", paths.conf.display())))
+                }
+                Err(error) => Err(CliError::new(format!("could not run keyd check: {error}"))),
             }
         }
         Command::Apply { yes } => apply_flow(paths, *yes, None),
@@ -518,11 +522,14 @@ fn selftest(paths: &Paths) -> i32 {
     }
 
     if keyd_bin().is_some() {
-        check_that(check(&text).is_none(), "keyd accepts default.conf");
+        check_that(
+            matches!(check(&text), Ok(CheckOutcome::Accepted)),
+            "keyd accepts default.conf",
+        );
         for entry in crate::keyd::data::CATALOG {
             let probe = format!("[nav]\na = {}\n", entry.action);
             check_that(
-                check(&probe).is_none(),
+                matches!(check(&probe), Ok(CheckOutcome::Accepted)),
                 &format!("keyd accepts catalog action {}", entry.action),
             );
         }

@@ -83,6 +83,9 @@ fn rejects_unsupported_syntax() {
     assert!(parse_macro("nope").is_none());
     assert!(parse_macro("macro()").is_none());
     assert!(parse_macro("macro(9999ms)").is_none());
+    // Beyond u32: Python's int() still reads it and rejects it as over 1023; it must not fall
+    // through to being typed as text.
+    assert!(parse_macro("macro(99999999999ms)").is_none());
 }
 
 #[test]

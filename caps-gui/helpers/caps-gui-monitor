@@ -2,9 +2,17 @@
 # caps-gui-monitor: stream keyd's monitor output for the GUI.
 # Root-owned helper, installed to /usr/libexec by `install.sh --install-policy`.
 # Takes no arguments; the absolute path keeps root's PATH out of it.
+#
+# pkexec runs this as root, so the app cannot signal it (kill gets EPERM). The app stops the
+# stream by closing this process's stdin instead: `cat` returns on EOF, the trap kills keyd, and
+# the helper exits.
 set -eu
 if [ "$#" -ne 0 ]; then
     echo "caps-gui-monitor takes no arguments" >&2
     exit 2
 fi
-exec /usr/bin/keyd monitor
+
+/usr/bin/keyd monitor &
+monitor=$!
+trap 'kill "$monitor" 2>/dev/null || true' EXIT INT TERM
+cat > /dev/null

@@ -1,4 +1,5 @@
 //! Headless UI tests: the real view and key handler, driven through Rune's `Runtime`.
+#![cfg(feature = "ui")]
 
 use caps_gui::cli::Paths;
 use caps_gui::ui::{State, on_key, view};

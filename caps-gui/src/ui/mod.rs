@@ -70,24 +70,26 @@ impl State {
     /// Load the checkout's config.
     pub fn load(paths: Paths) -> std::io::Result<Self> {
         let text = std::fs::read_to_string(&paths.conf)?;
-        let binds = parse(&text);
-        let tap = read_tap(&text);
-        Ok(Self { paths, text, binds, tap, ..Self::default() })
+        let mut state = Self { paths, ..Self::default() };
+        state.apply_text(text);
+        Ok(state)
     }
 
-    /// Read the config into an already-built state, reporting a failure in the status line.
+    /// Read the config again, reporting a failure in the status line.
     pub fn reload(&mut self) {
         match std::fs::read_to_string(&self.paths.conf) {
-            Ok(text) => {
-                self.binds = parse(&text);
-                self.tap = read_tap(&text);
-                self.text = text;
-                self.status.clear();
-            }
+            Ok(text) => self.apply_text(text),
             Err(error) => {
                 self.status = format!("cannot read {}: {error}", self.paths.conf.display());
             }
         }
+    }
+
+    fn apply_text(&mut self, text: String) {
+        self.binds = parse(&text);
+        self.tap = read_tap(&text);
+        self.text = text;
+        self.status.clear();
     }
 
     /// Indexes of the bindings the filter lets through.
@@ -272,17 +274,18 @@ pub fn on_key(s: &mut State, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
 }
 
-/// Called once before the first frame: read the config into the state.
-fn setup(s: &mut State, _waker: rune::Waker) {
-    s.reload();
-}
-
 /// Open the window.
 pub fn run() {
-    rune::run(AppSpec::<State> {
+    let state = State::load(Paths::from_env()).unwrap_or_else(|error| {
+        let mut state = State::default();
+        state.status = format!("cannot read {}: {error}", state.paths.conf.display());
+        state
+    });
+    rune::App::new(AppSpec::<State> {
         scenes: &[],
-        setup: Some(setup),
         on_key: Some(on_key),
         ..AppSpec::new("caps-gui", (980.0, 760.0), State::default, view)
-    });
+    })
+    .init(move || state)
+    .run();
 }

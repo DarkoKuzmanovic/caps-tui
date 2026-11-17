@@ -5,6 +5,7 @@
 //! UI free to draw.
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -59,29 +60,43 @@ pub fn split_command(line: &str) -> Vec<String> {
     out
 }
 
-/// `None` when keyd accepts the config (or is not installed), else its error text.
-pub fn check(text: &str) -> Option<String> {
+/// What `keyd check` said about a config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckOutcome {
+    Accepted,
+    Rejected(String),
+    /// keyd is not installed, so nothing was validated.
+    KeydMissing,
+}
+
+/// Validate a config with keyd.
+///
+/// `Err` means the check itself could not run (no temp file, no process): callers must not read
+/// that as "accepted". Python let these raise; returning `Option` would fail open.
+pub fn check(text: &str) -> std::io::Result<CheckOutcome> {
     check_with(keyd_bin().as_deref(), text)
 }
 
 /// `check`, against an explicit binary — the form tests use.
-pub fn check_with(binary: Option<&Path>, text: &str) -> Option<String> {
-    let binary = binary?;
-    let mut file = tempfile::Builder::new().suffix(".conf").tempfile().ok()?;
-    file.write_all(text.as_bytes()).ok()?;
+pub fn check_with(binary: Option<&Path>, text: &str) -> std::io::Result<CheckOutcome> {
+    let Some(binary) = binary else {
+        return Ok(CheckOutcome::KeydMissing);
+    };
+    let mut file = tempfile::Builder::new().suffix(".conf").tempfile()?;
+    file.write_all(text.as_bytes())?;
     let path = file.path().to_path_buf();
-    let output = Command::new(binary).arg("check").arg(&path).output().ok()?;
+    let output = Command::new(binary).arg("check").arg(&path).output()?;
     if output.status.success() {
-        return None;
+        return Ok(CheckOutcome::Accepted);
     }
     let mut message = String::from_utf8_lossy(&output.stdout).to_string();
     message.push_str(&String::from_utf8_lossy(&output.stderr));
-    Some(
+    Ok(CheckOutcome::Rejected(
         message
             .replace(&path.display().to_string(), "config")
             .trim()
             .to_string(),
-    )
+    ))
 }
 
 /// The command that streams keyd's monitor output, and whether it needs sudo.
@@ -148,6 +163,7 @@ pub fn monitor_capture(command: &[String], timeout: Duration) -> Result<String, 
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
         .map_err(|error| CaptureError::Spawn(error.to_string()))?;
     let stdout = child.stdout.take().expect("piped");
@@ -187,9 +203,27 @@ pub fn monitor_capture(command: &[String], timeout: Duration) -> Result<String, 
 }
 
 fn stop(child: &mut Child) {
-    if child.try_wait().ok().flatten().is_none() {
-        let _ = child.kill();
+    if child.try_wait().ok().flatten().is_some() {
+        return;
     }
+    let pid = child.id() as i32;
+    // The child leads its own process group (`process_group(0)` at spawn), so this reaches
+    // sudo/pkexec and whatever they started. A direct SIGKILL would leave a root `keyd monitor`
+    // alive until its next write.
+    unsafe {
+        libc::kill(-pid, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    unsafe {
+        libc::kill(-pid, libc::SIGKILL);
+    }
+    let _ = child.kill();
     let _ = child.wait();
 }
 
@@ -307,9 +341,11 @@ pub fn backup_entries(directory: Option<&Path>) -> Vec<BackupEntry> {
         .collect()
 }
 
-/// A live `keyd monitor` process read on a background thread.
+/// A live `keyd monitor` process read on background threads.
 pub struct MonitorStream {
     child: Child,
+    /// Kept open: the helper exits when this closes, which is how a root process is stopped.
+    stdin: Option<std::process::ChildStdin>,
     lines: Receiver<String>,
     closed: bool,
 }
@@ -321,19 +357,35 @@ impl MonitorStream {
             .ok_or_else(|| std::io::Error::other("empty monitor command"))?;
         let mut child = Command::new(program)
             .args(args)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .process_group(0)
             .spawn()?;
-        let stdout = child.stdout.take().expect("piped");
-        let (sender, lines) = channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if sender.send(line).is_err() {
-                    break;
+        let stdin = child.stdin.take();
+        let (sender, lines) = channel::<String>();
+        // stderr goes to the same channel, as Python's `stderr=STDOUT`: "sudo: a password is
+        // required" and pkexec denials belong in the panel, and an unread pipe would stall the
+        // child once its buffer filled.
+        let mut readers: Vec<Box<dyn std::io::Read + Send>> = Vec::new();
+        if let Some(stdout) = child.stdout.take() {
+            readers.push(Box::new(stdout));
+        }
+        if let Some(stderr) = child.stderr.take() {
+            readers.push(Box::new(stderr));
+        }
+        for stream in readers {
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                    if sender.send(line).is_err() {
+                        break;
+                    }
                 }
-            }
-        });
-        Ok(Self { child, lines, closed: false })
+            });
+        }
+        drop(sender);
+        Ok(Self { child, stdin, lines, closed: false })
     }
 
     /// Complete lines that have arrived, and the exit status once the process has ended.
@@ -354,8 +406,9 @@ impl MonitorStream {
         (lines, self.child.try_wait().ok().flatten())
     }
 
-    /// Terminate and reap the monitor.
+    /// Stop the monitor: close its stdin first (a root helper exits on EOF), then signal it.
     pub fn close(&mut self) {
+        drop(self.stdin.take());
         stop(&mut self.child);
         self.closed = true;
     }
@@ -364,6 +417,7 @@ impl MonitorStream {
 impl Drop for MonitorStream {
     fn drop(&mut self) {
         if !self.closed {
+            drop(self.stdin.take());
             stop(&mut self.child);
         }
     }

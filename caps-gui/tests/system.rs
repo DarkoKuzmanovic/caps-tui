@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use caps_gui::keyd::system::{
-    MonitorStream, backup_entries, check_with, monitor_capture, monitor_command_from,
+    CheckOutcome, MonitorStream, backup_entries, check_with, monitor_capture, monitor_command_from,
     parse_monitor_event, parse_monitor_line, read_live_config_in, split_command,
 };
 
@@ -79,13 +79,33 @@ fn check_reports_keyd_errors_with_the_temp_path_hidden() {
         "keyd-fail",
         "#!/bin/sh\necho 'invalid key or action'\nexit 1\n",
     );
-    let message = check_with(Some(&failing), "[nav]\nBROKEN = nonsense\n").expect("error");
-    assert!(message.contains("invalid key or action"));
-    assert!(!message.contains("tmp"), "the temp path must be replaced: {message}");
+    match check_with(Some(&failing), "[nav]\nBROKEN = nonsense\n").expect("check ran") {
+        CheckOutcome::Rejected(message) => {
+            assert!(message.contains("invalid key or action"), "{message}");
+            assert!(!message.contains("tmp"), "the temp path must be replaced: {message}");
+        }
+        other => panic!("expected a rejection, got {other:?}"),
+    }
 
     let passing = write_executable(dir.path(), "keyd-ok", "#!/bin/sh\nexit 0\n");
-    assert_eq!(check_with(Some(&passing), "[nav]\na = b\n"), None);
-    assert_eq!(check_with(None, "[nav]\na = b\n"), None);
+    assert_eq!(
+        check_with(Some(&passing), "[nav]\na = b\n").expect("check ran"),
+        CheckOutcome::Accepted
+    );
+    assert_eq!(
+        check_with(None, "[nav]\na = b\n").expect("no binary is not an error"),
+        CheckOutcome::KeydMissing
+    );
+}
+
+#[test]
+fn a_missing_keyd_binary_is_an_error_not_an_acceptance() {
+    let dir = temp_dir();
+    // A path that exists but cannot be executed: the spawn fails, and that must not read as
+    // "keyd accepted it".
+    let broken = dir.path().join("not-executable");
+    std::fs::write(&broken, "not a program").expect("write");
+    assert!(check_with(Some(&broken), "[nav]\na = b\n").is_err());
 }
 
 #[test]

@@ -109,24 +109,40 @@ pub fn command(how: &Priv, helper: Helper) -> Command {
     }
 }
 
+/// What the apply helper said.
+#[derive(Debug)]
+pub struct ApplyOutcome {
+    pub status: ExitStatus,
+    /// The helper's combined stdout and stderr, trimmed — the reason a rejection gives.
+    pub message: String,
+}
+
 /// Install a config through the apply helper, feeding it on stdin.
-pub fn apply_text(how: &Priv, config: &str) -> std::io::Result<ExitStatus> {
+///
+/// Both streams are piped: a `.desktop` launch has no terminal, so a rejection would otherwise
+/// land in the journal and the window would only see a bare exit status.
+pub fn apply_text(how: &Priv, config: &str) -> std::io::Result<ApplyOutcome> {
     let mut child = command(how, Helper::Apply)
         .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()?;
     {
         let stdin = child.stdin.as_mut().expect("piped stdin");
         stdin.write_all(config.as_bytes())?;
     }
     drop(child.stdin.take());
-    child.wait()
+    let output = child.wait_with_output()?;
+    let mut message = String::from_utf8_lossy(&output.stdout).to_string();
+    message.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok(ApplyOutcome { status: output.status, message: message.trim().to_string() })
 }
 
-/// Start the monitor helper, reading its output.
+/// Start the monitor helper, reading its output. Its stdin stays open: the helper exits when it
+/// closes, which is how the app stops a root process it cannot signal.
 pub fn spawn_monitor(how: &Priv) -> std::io::Result<Child> {
     command(how, Helper::Monitor)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

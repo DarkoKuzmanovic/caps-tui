@@ -234,10 +234,10 @@ pub fn parse_macro(action: &str) -> Option<Vec<MacroStep>> {
     }
     let mut steps = Vec::new();
     for token in tokens {
-        if let Some(ms) = delay_value(&token) {
-            if ms > 1023 {
-                return None;
-            }
+        if is_delay(&token) {
+            // A delay that does not fit, or is over 1023 ms, makes the whole parse fail —
+            // Python's `int()` never overflows, so it never falls through to text.
+            let ms = delay_value(&token).filter(|ms| *ms <= 1023)?;
             steps.push(MacroStep::Delay(ms));
         } else if token.eq_ignore_ascii_case("space") {
             steps.push(MacroStep::Text(" ".into()));

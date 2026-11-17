@@ -5,10 +5,17 @@ edition = "2024"
 license = "MIT"
 description = "A native editor for the keyd Caps Lock layer"
 
+[features]
+default = ["ui"]
+# The Rune window. Off, the crate is just the config model and the CLI, so tests and CI need no
+# GPU or windowing stack.
+ui = ["dep:rune"]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+libc = "0.2"
 regex = "1"
-rune = { git = "https://github.com/anomalyco/rune", rev = "cca5df6fafb4721d96fe105f126ebfd2ec351bb6" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "cca5df6fafb4721d96fe105f126ebfd2ec351bb6", optional = true }
 similar = "2"
 tempfile = "3"
 thiserror = "2"

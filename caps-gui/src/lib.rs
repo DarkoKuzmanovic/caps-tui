@@ -5,6 +5,7 @@
 
 pub mod cli;
 pub mod keyd;
+#[cfg(feature = "ui")]
 pub mod ui;
 
 pub use keyd::config::{Binding, Tap};

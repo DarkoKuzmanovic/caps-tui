@@ -2,13 +2,14 @@
 resolver = "3"
 members = ["caps-gui"]
 
-# Rune ships vendored patches for five crates and its own comment says "apps that build Rune
-# patch it too": a dependency's [patch] does not reach the workspace that depends on it, so
-# without these the build fails on `parley_engine`'s `line-dictionaries` feature.
-# These paths assume the Rune checkout next to this one (`../rune`, pinned in caps-gui/Cargo.toml).
+# Rune ships vendored patches for five crates and says "apps that build Rune patch it too": a
+# dependency's [patch] does not reach the workspace that depends on it, so without these the
+# build fails on `parley_engine`'s `line-dictionaries` feature. Pointing at the same git rev
+# (rather than a sibling checkout) keeps the repo portable: cargo finds each package by name in
+# the repository.
 [patch.crates-io]
-accesskit_macos = { path = "../rune/vendor/accesskit_macos" }
-accesskit_windows = { path = "../rune/vendor/accesskit_windows" }
-parley_engine = { path = "../rune/vendor/parley_engine" }
-wgpu-hal = { path = "../rune/vendor/wgpu-hal" }
-winit = { path = "../rune/vendor/winit" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "cca5df6fafb4721d96fe105f126ebfd2ec351bb6" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "cca5df6fafb4721d96fe105f126ebfd2ec351bb6" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "cca5df6fafb4721d96fe105f126ebfd2ec351bb6" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "cca5df6fafb4721d96fe105f126ebfd2ec351bb6" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "cca5df6fafb4721d96fe105f126ebfd2ec351bb6" }
