@@ -5,5 +5,6 @@
 
 pub mod cli;
 pub mod keyd;
+pub mod ui;
 
 pub use keyd::config::{Binding, Tap};

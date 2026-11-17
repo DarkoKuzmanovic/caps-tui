@@ -8,6 +8,7 @@ description = "A native editor for the keyd Caps Lock layer"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 regex = "1"
+rune = { git = "https://github.com/anomalyco/rune", rev = "cca5df6fafb4721d96fe105f126ebfd2ec351bb6" }
 similar = "2"
 tempfile = "3"
 thiserror = "2"
